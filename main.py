@@ -3,7 +3,7 @@
 Assistant Vocal en Temps Réel (Français)
 
 Application de conversation vocale en temps réel utilisant:
-- STT: Whisper tiny (transcription parole → texte)
+- STT: Whisper small (transcription parole → texte)
 - LLM: Ollama llama3.2:3b (génération de réponses)
 - TTS: Kokoro voix française (synthèse texte → parole)
 

@@ -22,8 +22,8 @@ START_STT_SERVER = False  # Set to True to use the client/server version of Real
 DEFAULT_RECORDER_CONFIG: Dict[str, Any] = {
     "use_microphone": True,  # CHANGÉ: True pour utiliser le microphone
     "spinner": True,  # CHANGÉ: True pour feedback terminal
-    "model": "tiny",  # CHANGÉ: tiny au lieu de base.en pour plus de rapidité
-    "realtime_model_type": "tiny",  # CHANGÉ: tiny au lieu de base.en
+    "model": "small",  # CHANGÉ: small au lieu de base.en pour plus de rapidité
+    "realtime_model_type": "small",  # CHANGÉ: small au lieu de base.en
     "use_main_model_for_realtime": False,
     "language": "fr",  # CHANGÉ: français au lieu d'anglais
     "silero_sensitivity": 0.05,
@@ -294,13 +294,13 @@ class TranscriptionProcessor:
                     hot_condition_met = time_since_silence > start_hot_condition_time
                     if hot_condition_met and not hot:
                         hot = True
-                        print("HOT")
+                        logger.debug("HOT - transcription complète imminente")
                         if self.potential_full_transcription_callback:
                             self.potential_full_transcription_callback(self.realtime_text)
                     elif not hot_condition_met and hot:
                         # Transitioning from Hot to Cold while still in silence period (e.g., silence_waiting_time changed)
                         if self._is_recorder_recording():  # Check if still recording before aborting
-                            print("COLD (during silence)")
+                            logger.debug("COLD (during silence)")
                             if self.potential_full_transcription_abort_callback:
                                 self.potential_full_transcription_abort_callback()
                         hot = False
@@ -308,7 +308,7 @@ class TranscriptionProcessor:
                 elif hot:  # Exited silence period (speech_end_silence_start is 0 or None)
                     # If we were hot, but silence ended (e.g., new speech started), transition to cold
                     if self._is_recorder_recording():  # Check if recording actually restarted
-                        print("COLD (silence ended)")
+                        logger.debug("COLD (silence ended)")
                         if self.potential_full_transcription_abort_callback:
                             self.potential_full_transcription_abort_callback()
                     hot = False

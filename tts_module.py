@@ -325,7 +325,7 @@ class AudioProcessor:
                     # logger.debug(f"{generation_string} Quick chunk ok (gap={gap:.3f}s ≤ {play_duration:.3f}s). Text: {text[:50]}...")
                     good_streak += 1
                 else:
-                    logger.warning(
+                    logger.debug(
                         f" {generation_string} Quick chunk slow (gap={gap:.3f}s > {play_duration:.3f}s). Text: {text[:50]}..."
                     )
                     good_streak = 0  # Reset streak on slow chunk
@@ -524,7 +524,7 @@ class AudioProcessor:
                     # logger.debug(f"{generation_string} Final chunk ok (gap={gap:.3f}s ≤ {play_duration:.3f}s).")
                     good_streak += 1
                 else:
-                    logger.warning(f" {generation_string} Final chunk slow (gap={gap:.3f}s > {play_duration:.3f}s).")
+                    logger.debug(f" {generation_string} Final chunk slow (gap={gap:.3f}s > {play_duration:.3f}s).")
                     good_streak = 0
 
             put_occurred_this_call = False

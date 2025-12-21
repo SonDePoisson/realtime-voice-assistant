@@ -45,7 +45,7 @@ class Generation:
 class ConversationManager:
     """
     Orchestre la conversation en temps réel avec 3 composants principaux:
-    - STT (Speech-to-Text) avec Whisper tiny
+    - STT (Speech-to-Text) avec Whisper small
     - LLM (Large Language Model) avec Ollama llama3.2:3b
     - TTS (Text-to-Speech) avec Kokoro voix française
 
