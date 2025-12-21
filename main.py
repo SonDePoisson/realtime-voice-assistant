@@ -24,10 +24,10 @@ from conversation_manager import ConversationManager
 from logsetup import setup_logging
 
 LLM_PROVIDER = "ollama"
-LLM_MODEL = "llama3.2:3b"
+LLM_MODEL = "ministral-3"  # ministral-3:latest # llama3.2:3b
 TTS_MODEL = "kokoro"
 STT_MODEL = "small"  # Configure in stt_module
-LANGUAGE = "en"
+LANGUAGE = "fr"
 
 # Désactiver les warnings pour un affichage plus propre
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Éviter les deadlocks avec HuggingFace tokenizers

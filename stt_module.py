@@ -25,7 +25,7 @@ DEFAULT_RECORDER_CONFIG: Dict[str, Any] = {
     "model": "small",  # CHANGÉ: small au lieu de base.en pour plus de rapidité
     "realtime_model_type": "small",  # CHANGÉ: small au lieu de base.en
     "use_main_model_for_realtime": False,
-    "language": "en",  # Pass Through Main
+    "language": "fr",
     "silero_sensitivity": 0.05,
     "webrtc_sensitivity": 3,
     "post_speech_silence_duration": 0.7,
