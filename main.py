@@ -80,7 +80,7 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
 
     print("\nInitialisation de l'assistant...")
-    print("   (Cela peut prendre quelques secondes...)\n")
+    print("(Cela peut prendre quelques secondes...)\n")
 
     try:
         # Créer le gestionnaire de conversation
