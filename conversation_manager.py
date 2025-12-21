@@ -299,15 +299,8 @@ class ConversationManager:
 
         logger.debug("Audio Player Worker démarré")
 
-        # Initialiser PyAudio une seule fois
+        # Initialiser PyAudio une seule fois (réutilisé pour toutes les générations)
         p = pyaudio.PyAudio()
-        stream = p.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=24000,
-            output=True,
-            frames_per_buffer=4096,
-        )
 
         try:
             while not self.shutdown_event.is_set():
@@ -324,8 +317,18 @@ class ConversationManager:
                 gen.audio_started = True
                 logger.debug("Lecture audio démarrée...")
 
-                # Lire et jouer les chunks audio
+                # Ouvrir un nouveau stream pour cette génération
+                stream = None
                 try:
+                    stream = p.open(
+                        format=pyaudio.paInt16,
+                        channels=1,
+                        rate=24000,
+                        output=True,
+                        frames_per_buffer=4096,
+                    )
+
+                    # Lire et jouer les chunks audio
                     while not self.abort_event.is_set():
                         try:
                             chunk = gen.audio_queue.get(timeout=0.1)
@@ -346,10 +349,15 @@ class ConversationManager:
                 except Exception as e:
                     logger.error(f"Erreur lors de la lecture audio: {e}", exc_info=True)
 
+                finally:
+                    # Fermer le stream proprement après chaque génération
+                    if stream:
+                        stream.stop_stream()
+                        stream.close()
+                        logger.debug("Stream audio fermé")
+
         finally:
             # Cleanup PyAudio
-            stream.stop_stream()
-            stream.close()
             p.terminate()
             logger.debug("Audio Player Worker arrêté")
 

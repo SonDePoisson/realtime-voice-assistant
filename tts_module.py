@@ -19,6 +19,9 @@ from RealtimeTTS import (
     TextToAudioStream,
 )
 
+# Supprimer les warnings de phonemizer
+logging.getLogger("phonemizer").setLevel(logging.ERROR)
+
 logger = logging.getLogger(__name__)
 
 # Default configuration constants
