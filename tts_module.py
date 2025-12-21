@@ -109,7 +109,7 @@ class AudioProcessor:
         # Dynamically load and configure the selected TTS engine
         if engine == "kokoro":
             self.engine = KokoroEngine(
-                voice="af_sky",  # CHANGÉ: voix française (af_sky, af_bella ou af)
+                voice="ff_siwis",  # CHANGÉ: voix française (af_sky, af_bella ou af)
                 default_speed=1.26,
                 trim_silence=True,
                 silence_threshold=0.01,
