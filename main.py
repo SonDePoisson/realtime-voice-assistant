@@ -20,23 +20,20 @@ import sys
 import time
 import warnings
 
+from conversation_manager import ConversationManager
+from logsetup import setup_logging
+
 # Désactiver les warnings pour un affichage plus propre
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Éviter les deadlocks avec HuggingFace tokenizers
 warnings.filterwarnings("ignore", category=UserWarning)  # Warnings PyTorch/Whisper
 warnings.filterwarnings("ignore", category=FutureWarning)  # Warnings PyTorch
 warnings.filterwarnings("ignore", category=RuntimeWarning)  # Warnings numpy/whisper
 
-from conversation_manager import ConversationManager
-from logsetup import setup_logging
-
 # Configuration du logging
 setup_logging(logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Supprimer les warnings de phonemizer
-logging.getLogger("phonemizer").setLevel(logging.ERROR)
 
-# Instance globale pour le signal handler
 manager = None
 
 

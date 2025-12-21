@@ -80,7 +80,9 @@ class TextContext:
                 if i >= min_len and alnum_count >= min_alnum_count:
                     context_str = txt[:i]
                     remaining_str = txt[i:]
-                    logger.debug(f"Context found after char no: {i}, context: {context_str}")
+                    logger.debug(
+                        f"Context found after char no: {i}, context: {context_str}"
+                    )
                     return context_str, remaining_str
 
         # No suitable context found within the max_len limit

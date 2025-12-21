@@ -123,20 +123,28 @@ class ConversationManager:
                 logger.debug(f"Prompt système chargé depuis {filepath}")
                 return prompt
         except FileNotFoundError:
-            logger.warning(f"Fichier {filepath} introuvable, utilisation du prompt par défaut")
+            logger.warning(
+                f"Fichier {filepath} introuvable, utilisation du prompt par défaut"
+            )
             return "Tu es un assistant vocal français serviable et amical."
 
     def _start_workers(self):
         """Démarre les threads workers"""
         logger.debug("Démarrage des workers...")
 
-        self.llm_thread = threading.Thread(target=self._llm_worker, name="LLM-Worker", daemon=True)
+        self.llm_thread = threading.Thread(
+            target=self._llm_worker, name="LLM-Worker", daemon=True
+        )
         self.llm_thread.start()
 
-        self.tts_thread = threading.Thread(target=self._tts_worker, name="TTS-Worker", daemon=True)
+        self.tts_thread = threading.Thread(
+            target=self._tts_worker, name="TTS-Worker", daemon=True
+        )
         self.tts_thread.start()
 
-        self.audio_player_thread = threading.Thread(target=self._audio_player_worker, name="Audio-Player", daemon=True)
+        self.audio_player_thread = threading.Thread(
+            target=self._audio_player_worker, name="Audio-Player", daemon=True
+        )
         self.audio_player_thread.start()
 
         logger.debug("Workers démarrés (LLM, TTS, Audio Player)")
@@ -217,7 +225,9 @@ class ConversationManager:
                     gen.text_queue.put(None)  # Signal de fin
 
                     # Ajouter la réponse complète à l'historique
-                    self.history.append({"role": "assistant", "content": gen.assistant_text})
+                    self.history.append(
+                        {"role": "assistant", "content": gen.assistant_text}
+                    )
 
                     logger.debug(f"Assistant: {gen.assistant_text}")
 

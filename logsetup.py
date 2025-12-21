@@ -15,7 +15,9 @@ class CustomTimeFormatter(logging.Formatter):
     using the local time zone derived from the log record's creation time.
     """
 
-    def formatTime(self, record: logging.LogRecord, datefmt: Optional[str] = None) -> str:
+    def formatTime(
+        self, record: logging.LogRecord, datefmt: Optional[str] = None
+    ) -> str:
         """
         Formats the log record's creation time into MM:SS.cs format.
 

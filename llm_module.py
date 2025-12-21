@@ -498,17 +498,17 @@ class LLM:
                 for token in generator:
                     if first_token_time is None:
                         first_token_time = time.time()
-                        logger.debug(f"️ Prewarm TTFT: {(first_token_time - gen_start_time):.4f}s")
+                        logger.debug("️ Prewarm TTFT: {(first_token_time - gen_start_time):.4f}s")
                     full_response += token
                     token_count += 1
                 # End of loop means generator is exhausted
                 gen_end_time = time.time()
                 logger.debug(
-                    f"ℹ️ Prewarm consumed {token_count} tokens in {(gen_end_time - gen_start_time):.4f}s. Full response: '{full_response}'"
+                    f" Prewarm consumed {token_count} tokens in {(gen_end_time - gen_start_time):.4f}s. Full response: '{full_response}'"
                 )
 
                 if token_count == 0 and not full_response:
-                    logger.warning(f"️ Prewarm yielded no response content, but generation finished.")
+                    logger.warning("Prewarm yielded no response content, but generation finished.")
                 # else: pass # If we got content, great.
 
                 prewarm_end_time = time.time()
