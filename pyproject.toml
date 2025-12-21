@@ -16,4 +16,5 @@ dependencies = [
     "sentence-transformers>=2.2.0",
     "pip>=25.3",
     "dotenv>=0.9.9",
+    "edge-tts>=7.2.7",
 ]

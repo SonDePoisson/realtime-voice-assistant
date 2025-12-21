@@ -5,7 +5,7 @@ Assistant Vocal en Temps Réel
 Application de conversation vocale en temps réel utilisant:
 - STT: Whisper small (transcription parole → texte)
 - LLM: Ollama llama3.2:3b (génération de réponses)
-- TTS: Kokoro voix française (synthèse texte → parole)
+- TTS: EdgeTTS voix multilingue (synthèse texte → parole)
 
 Usage:
     uv run main.py
@@ -25,7 +25,7 @@ from logsetup import setup_logging
 
 LLM_PROVIDER = "ollama"
 LLM_MODEL = "ministral-3"  # ministral-3:latest # llama3.2:3b
-TTS_MODEL = "kokoro"
+TTS_MODEL = "edge_tts"
 STT_MODEL = "small"  # Configure in stt_module
 LANGUAGE = "fr"
 

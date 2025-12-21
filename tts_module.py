@@ -1,21 +1,16 @@
 import asyncio
 import logging
-import os
-import struct
 import threading
 import time
 from collections import namedtuple
 from queue import Queue
 from typing import Callable, Generator, Optional
 
-import numpy as np
-from huggingface_hub import hf_hub_download
+import edge_tts
 
 # Assuming RealtimeTTS is installed and available
 from RealtimeTTS import (
     KokoroEngine,
-    OrpheusEngine,
-    OrpheusVoice,
     TextToAudioStream,
 )
 
@@ -25,62 +20,30 @@ logging.getLogger("phonemizer").setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
 
 # Default configuration constants
-START_ENGINE = "kokoro"
+START_ENGINE = "edge_tts"
 KOKORO_VOICES = {
     "fr": "ff_siwis",  # Voix française féminine
     "en": "af_heart",  # Voix anglaise féminine
 }
+EDGE_TTS_VOICES = {
+    "fr": "fr-FR-DeniseNeural",  # Voix française féminine
+    "en": "en-US-AvaMultilingualNeural",  # Voix anglaise multilingue
+}
 Silence = namedtuple("Silence", ("comma", "sentence", "default"))
 ENGINE_SILENCES = {
-    "coqui": Silence(comma=0.3, sentence=0.6, default=0.3),
     "kokoro": Silence(comma=0.3, sentence=0.6, default=0.3),
-    "orpheus": Silence(comma=0.3, sentence=0.6, default=0.3),
+    "edge_tts": Silence(comma=0.3, sentence=0.6, default=0.3),
 }
-# Stream chunk sizes influence latency vs. throughput trade-offs
+# Stream chunk sizes influence latency vs. throughput trade-offs (used by Kokoro)
 QUICK_ANSWER_STREAM_CHUNK_SIZE = 8
 FINAL_ANSWER_STREAM_CHUNK_SIZE = 30
 
 
-# Coqui model download helper functions
-def create_directory(path: str) -> None:
-    """
-    Creates a directory at the specified path if it doesn't already exist.
-
-    Args:
-        path: The directory path to create.
-    """
-    if not os.path.exists(path):
-        os.makedirs(path)
-
-
-def ensure_lasinya_models(models_root: str = "models", model_name: str = "Lasinya") -> None:
-    """
-    Ensures the Coqui XTTS Lasinya model files are present locally.
-
-    Checks for required model files (config.json, vocab.json, etc.) within
-    the specified directory structure. If any file is missing, it downloads
-    it from the 'KoljaB/XTTS_Lasinya' Hugging Face Hub repository.
-
-    Args:
-        models_root: The root directory where models are stored.
-        model_name: The specific name of the model subdirectory.
-    """
-    base = os.path.join(models_root, model_name)
-    create_directory(base)
-    files = ["config.json", "vocab.json", "speakers_xtts.pth", "model.pth"]
-    for fn in files:
-        local_file = os.path.join(base, fn)
-        if not os.path.exists(local_file):
-            # Not using logger here as it might not be configured yet during module import/init
-            print(f"Downloading {fn} to {base}")
-            hf_hub_download(repo_id="KoljaB/XTTS_Lasinya", filename=fn, local_dir=base)
-
-
 class AudioProcessor:
     """
-    Manages Text-to-Speech (TTS) synthesis using various engines via RealtimeTTS.
+    Manages Text-to-Speech (TTS) synthesis using various engines.
 
-    This class initializes a chosen TTS engine (Coqui, Kokoro, or Orpheus),
+    This class initializes a chosen TTS engine (Kokoro or EdgeTTS),
     configures it for streaming output, measures initial latency (TTFT),
     and provides methods to synthesize audio from text strings or generators,
     placing the resulting audio chunks into a queue. It handles dynamic
@@ -92,26 +55,22 @@ class AudioProcessor:
         self,
         engine: str = START_ENGINE,
         language: str = "fr",
-        orpheus_model: str = "orpheus-3b-0.1-ft-Q8_0-GGUF/orpheus-3b-0.1-ft-q8_0.gguf",
     ) -> None:
         """
         Initializes the AudioProcessor with a specific TTS engine.
 
-        Sets up the chosen engine (Coqui, Kokoro, Orpheus), downloads Coqui models
-        if necessary, configures the RealtimeTTS stream, and performs an initial
-        synthesis to measure Time To First Audio chunk (TTFA).
+        Sets up the chosen engine (Kokoro or EdgeTTS), configures the stream,
+        and performs an initial synthesis to measure Time To First Audio chunk (TTFA).
 
         Args:
-            engine: The name of the TTS engine to use ("coqui", "kokoro", "orpheus").
+            engine: The name of the TTS engine to use ("kokoro", "edge_tts").
             language: Language code for voice selection (e.g., "fr", "en").
-            orpheus_model: The path or identifier for the Orpheus model file (used only if engine is "orpheus").
         """
         self.engine_name = engine
         self.language = language
         self.stop_event = threading.Event()
         self.finished_event = threading.Event()
         self.audio_chunks = asyncio.Queue()  # Queue for synthesized audio output
-        self.orpheus_model = orpheus_model
 
         self.silence = ENGINE_SILENCES.get(engine, ENGINE_SILENCES[self.engine_name])
         self.current_stream_chunk_size = QUICK_ANSWER_STREAM_CHUNK_SIZE  # Initial chunk size
@@ -132,94 +91,87 @@ class AudioProcessor:
                 fade_in_ms=15,
                 fade_out_ms=10,
             )
-        elif engine == "orpheus":
-            self.engine = OrpheusEngine(
-                model=self.orpheus_model,
-                temperature=0.8,
-                top_p=0.95,
-                repetition_penalty=1.1,
-                max_tokens=1200,
-            )
-            voice = OrpheusVoice("tara")
-            self.engine.set_voice(voice)
+        elif engine == "edge_tts":
+            # EdgeTTS ne nécessite pas d'initialisation d'engine
+            # La synthèse se fait directement via edge_tts.Communicate()
+            self.edge_voice = EDGE_TTS_VOICES.get(language, EDGE_TTS_VOICES["en"])
+            logger.debug(f"Using EdgeTTS voice '{self.edge_voice}' for language '{language}'")
+            self.engine = None  # EdgeTTS n'utilise pas RealtimeTTS
+            self.stream = None  # Pas de stream pour EdgeTTS
         else:
             raise ValueError(f"Unsupported engine: {engine}")
 
-        # Initialize the RealtimeTTS stream
-        self.stream = TextToAudioStream(
-            self.engine,
-            muted=False,  # CHANGÉ: False pour lecture directe sur haut-parleurs
-            playout_chunk_size=4096,  # Internal chunk size for processing
-            on_audio_stream_stop=self.on_audio_stream_stop,
-        )
+        # Initialize the RealtimeTTS stream (only for Kokoro)
+        if engine == "kokoro":
+            self.stream = TextToAudioStream(
+                self.engine,
+                muted=False,  # CHANGÉ: False pour lecture directe sur haut-parleurs
+                playout_chunk_size=4096,  # Internal chunk size for processing
+                on_audio_stream_stop=self.on_audio_stream_stop,
+            )
 
-        # Ensure Coqui engine starts with the quick chunk size
-        if (
-            self.engine_name == "coqui"
-            and hasattr(self.engine, "set_stream_chunk_size")
-            and self.current_stream_chunk_size != QUICK_ANSWER_STREAM_CHUNK_SIZE
-        ):
-            logger.debug(f"️ Setting Coqui stream chunk size to {QUICK_ANSWER_STREAM_CHUNK_SIZE} for initial setup.")
-            self.engine.set_stream_chunk_size(QUICK_ANSWER_STREAM_CHUNK_SIZE)
-            self.current_stream_chunk_size = QUICK_ANSWER_STREAM_CHUNK_SIZE
+        # Prewarm and measure TTFA (only for Kokoro)
+        if engine == "kokoro":
+            # Prewarm the engine
+            self.stream.feed("prewarm")
+            play_kwargs = dict(
+                log_synthesized_text=False,  # Don't log prewarm text
+                muted=True,
+                fast_sentence_fragment=False,
+                comma_silence_duration=self.silence.comma,
+                sentence_silence_duration=self.silence.sentence,
+                default_silence_duration=self.silence.default,
+                force_first_fragment_after_words=999999,  # Effectively disable this
+            )
+            self.stream.play(**play_kwargs)  # Synchronous play for prewarm
+            # Wait for prewarm to finish (indicated by on_audio_stream_stop)
+            while self.stream.is_playing():
+                time.sleep(0.01)
+            self.finished_event.wait()  # Wait for stop callback
+            self.finished_event.clear()
 
-        # Prewarm the engine
-        self.stream.feed("prewarm")
-        play_kwargs = dict(
-            log_synthesized_text=False,  # Don't log prewarm text
-            muted=True,
-            fast_sentence_fragment=False,
-            comma_silence_duration=self.silence.comma,
-            sentence_silence_duration=self.silence.sentence,
-            default_silence_duration=self.silence.default,
-            force_first_fragment_after_words=999999,  # Effectively disable this
-        )
-        self.stream.play(**play_kwargs)  # Synchronous play for prewarm
-        # Wait for prewarm to finish (indicated by on_audio_stream_stop)
-        while self.stream.is_playing():
-            time.sleep(0.01)
-        self.finished_event.wait()  # Wait for stop callback
-        self.finished_event.clear()
+            # Measure Time To First Audio (TTFA)
+            start_time = time.time()
+            ttfa = None
 
-        # Measure Time To First Audio (TTFA)
-        start_time = time.time()
-        ttfa = None
+            def on_audio_chunk_ttfa(chunk: bytes):
+                nonlocal ttfa
+                if ttfa is None:
+                    ttfa = time.time() - start_time
+                    logger.debug(f"️ TTFA measurement first chunk arrived, TTFA: {ttfa:.2f}s.")
 
-        def on_audio_chunk_ttfa(chunk: bytes):
-            nonlocal ttfa
-            if ttfa is None:
-                ttfa = time.time() - start_time
-                logger.debug(f"️ TTFA measurement first chunk arrived, TTFA: {ttfa:.2f}s.")
+            self.stream.feed("This is a test sentence to measure the time to first audio chunk.")
+            play_kwargs_ttfa = dict(
+                on_audio_chunk=on_audio_chunk_ttfa,
+                log_synthesized_text=False,  # Don't log test sentence
+                muted=True,
+                fast_sentence_fragment=False,
+                comma_silence_duration=self.silence.comma,
+                sentence_silence_duration=self.silence.sentence,
+                default_silence_duration=self.silence.default,
+                force_first_fragment_after_words=999999,
+            )
+            self.stream.play_async(**play_kwargs_ttfa)
 
-        self.stream.feed("This is a test sentence to measure the time to first audio chunk.")
-        play_kwargs_ttfa = dict(
-            on_audio_chunk=on_audio_chunk_ttfa,
-            log_synthesized_text=False,  # Don't log test sentence
-            muted=True,
-            fast_sentence_fragment=False,
-            comma_silence_duration=self.silence.comma,
-            sentence_silence_duration=self.silence.sentence,
-            default_silence_duration=self.silence.default,
-            force_first_fragment_after_words=999999,
-        )
-        self.stream.play_async(**play_kwargs_ttfa)
+            # Wait until the first chunk arrives or stream finishes
+            while ttfa is None and (self.stream.is_playing() or not self.finished_event.is_set()):
+                time.sleep(0.01)
+            self.stream.stop()  # Ensure stream stops cleanly
 
-        # Wait until the first chunk arrives or stream finishes
-        while ttfa is None and (self.stream.is_playing() or not self.finished_event.is_set()):
-            time.sleep(0.01)
-        self.stream.stop()  # Ensure stream stops cleanly
+            # Wait for stop callback if it hasn't fired yet
+            if not self.finished_event.is_set():
+                self.finished_event.wait(timeout=2.0)  # Add timeout for safety
+            self.finished_event.clear()
 
-        # Wait for stop callback if it hasn't fired yet
-        if not self.finished_event.is_set():
-            self.finished_event.wait(timeout=2.0)  # Add timeout for safety
-        self.finished_event.clear()
-
-        if ttfa is not None:
-            logger.debug(f"️ TTFA measurement complete. TTFA: {ttfa:.2f}s.")
-            self.tts_inference_time = ttfa * 1000  # Store as ms
+            if ttfa is not None:
+                logger.debug(f"️ TTFA measurement complete. TTFA: {ttfa:.2f}s.")
+                self.tts_inference_time = ttfa * 1000  # Store as ms
+            else:
+                logger.warning("️ TTFA measurement failed (no audio chunk received).")
+                self.tts_inference_time = 0
         else:
-            logger.warning("️ TTFA measurement failed (no audio chunk received).")
-            self.tts_inference_time = 0
+            # For EdgeTTS, skip prewarm and set a default TTFA
+            self.tts_inference_time = 200  # Estimated TTFA for EdgeTTS
 
         # Callbacks to be set externally if needed
         self.on_first_audio_chunk_synthesize: Optional[Callable[[], None]] = None
@@ -232,6 +184,52 @@ class AudioProcessor:
         """
         logger.debug("Audio stream stopped.")
         self.finished_event.set()
+
+    async def _synthesize_edge_tts(
+        self,
+        text: str,
+        audio_chunks: Queue,
+        stop_event: threading.Event,
+    ) -> bool:
+        """
+        Synthétise le texte avec EdgeTTS de manière asynchrone.
+
+        Args:
+            text: Le texte à synthétiser
+            audio_chunks: Queue pour les chunks audio
+            stop_event: Event pour arrêter la synthèse
+
+        Returns:
+            True si la synthèse est complète, False si interrompue
+        """
+        try:
+            communicate = edge_tts.Communicate(text, self.edge_voice)
+            first_chunk = True
+
+            async for chunk in communicate.stream():
+                if stop_event.is_set():
+                    logger.debug("EdgeTTS synthesis interrupted")
+                    return False
+
+                if chunk["type"] == "audio":
+                    audio_data = chunk["data"]
+                    try:
+                        audio_chunks.put_nowait(audio_data)
+
+                        # Appeler le callback au premier chunk
+                        if first_chunk and self.on_first_audio_chunk_synthesize:
+                            first_chunk = False
+                            try:
+                                self.on_first_audio_chunk_synthesize()
+                            except Exception as e:
+                                logger.error(f"Error in on_first_audio_chunk_synthesize callback: {e}")
+                    except Exception as e:
+                        logger.warning(f"EdgeTTS audio queue full, dropping chunk: {e}")
+
+            return True
+        except Exception as e:
+            logger.error(f"EdgeTTS synthesis error: {e}", exc_info=True)
+            return False
 
     def synthesize(
         self,
@@ -246,8 +244,7 @@ class AudioProcessor:
         Feeds the entire text string to the TTS engine. As audio chunks are generated,
         they are potentially buffered initially for smoother streaming and then put
         into the provided queue. Synthesis can be interrupted via the stop_event.
-        Skips initial silent chunks if using the Orpheus engine. Triggers the
-        `on_first_audio_chunk_synthesize` callback when the first valid audio chunk is queued.
+        Triggers the `on_first_audio_chunk_synthesize` callback when the first valid audio chunk is queued.
 
         Args:
             text: The text string to synthesize.
@@ -260,16 +257,20 @@ class AudioProcessor:
         Returns:
             True if synthesis completed fully, False if interrupted by stop_event.
         """
-        if (
-            self.engine_name == "coqui"
-            and hasattr(self.engine, "set_stream_chunk_size")
-            and self.current_stream_chunk_size != QUICK_ANSWER_STREAM_CHUNK_SIZE
-        ):
-            logger.debug(
-                f"️ {generation_string} Setting Coqui stream chunk size to {QUICK_ANSWER_STREAM_CHUNK_SIZE} for quick synthesis."
-            )
-            self.engine.set_stream_chunk_size(QUICK_ANSWER_STREAM_CHUNK_SIZE)
-            self.current_stream_chunk_size = QUICK_ANSWER_STREAM_CHUNK_SIZE
+        # Handle EdgeTTS separately (async)
+        if self.engine_name == "edge_tts":
+            logger.debug(f"▶️ {generation_string} Starting EdgeTTS synthesis. Text: {text[:50]}...")
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(
+                    self._synthesize_edge_tts(text, audio_chunks, stop_event)
+                )
+                if result:
+                    logger.debug(f"{generation_string} EdgeTTS synthesis complete.")
+                return result
+            finally:
+                loop.close()
 
         self.stream.feed(text)
         self.finished_event.clear()  # Reset finished event before starting
@@ -294,37 +295,6 @@ class AudioProcessor:
             now = time.time()
             samples = len(chunk) // BPS
             play_duration = samples / SR  # Duration of the current chunk
-
-            # --- Orpheus specific: Skip initial silence ---
-            if on_audio_chunk.first_call and self.engine_name == "orpheus":
-                if not hasattr(on_audio_chunk, "silent_chunks_count"):
-                    # Initialize silence detection state
-                    on_audio_chunk.silent_chunks_count = 0
-                    on_audio_chunk.silent_chunks_time = 0.0
-                    on_audio_chunk.silence_threshold = 200  # Amplitude threshold for silence
-
-                try:
-                    # Analyze chunk for silence
-                    fmt = f"{samples}h"  # Format for 16-bit signed integers
-                    pcm_data = struct.unpack(fmt, chunk)
-                    avg_amplitude = np.abs(np.array(pcm_data)).mean()
-
-                    if avg_amplitude < on_audio_chunk.silence_threshold:
-                        on_audio_chunk.silent_chunks_count += 1
-                        on_audio_chunk.silent_chunks_time += play_duration
-                        logger.debug(
-                            f"️ {generation_string} Quick Skipping silent chunk {on_audio_chunk.silent_chunks_count} (avg_amp: {avg_amplitude:.2f})"
-                        )
-                        return  # Skip this chunk
-                    elif on_audio_chunk.silent_chunks_count > 0:
-                        # First non-silent chunk after silence
-                        logger.debug(
-                            f"️ {generation_string} Quick Skipped {on_audio_chunk.silent_chunks_count} silent chunks, saved {on_audio_chunk.silent_chunks_time * 1000:.2f}ms"
-                        )
-                        # Proceed to process this non-silent chunk
-                except Exception as e:
-                    logger.warning(f"️ {generation_string} Quick Error analyzing audio chunk for silence: {e}")
-                    # Proceed assuming not silent on error
 
             # --- Timing and Logging ---
             if on_audio_chunk.first_call:
@@ -442,9 +412,7 @@ class AudioProcessor:
          Feeds text chunks yielded by the generator to the TTS engine. If audio_chunks
          is provided, audio is put into the queue (muted playback). If audio_chunks is None,
          audio is played directly to speakers. Synthesis can be interrupted via the stop_event.
-         Skips initial silent chunks if using the Orpheus engine. Sets specific playback
-         parameters when using the Orpheus engine. Triggers the
-        `on_first_audio_chunk_synthesize` callback when the first valid audio chunk is queued.
+         Triggers the `on_first_audio_chunk_synthesize` callback when the first valid audio chunk is queued.
 
 
          Args:
@@ -462,18 +430,18 @@ class AudioProcessor:
         if stop_event is None:
             stop_event = self.stop_event
 
+        # Handle EdgeTTS (accumulate generator into full text)
+        if self.engine_name == "edge_tts":
+            # EdgeTTS doesn't support streaming from generator, so accumulate text first
+            full_text = "".join(generator)
+            if audio_chunks is None:
+                # If no queue provided, we need one for EdgeTTS
+                logger.warning("EdgeTTS requires audio_chunks queue, cannot play directly")
+                return False
+            return self.synthesize(full_text, audio_chunks, stop_event, generation_string)
+
         # Determine if we're using queue mode or direct playback
         use_queue = audio_chunks is not None
-        if (
-            self.engine_name == "coqui"
-            and hasattr(self.engine, "set_stream_chunk_size")
-            and self.current_stream_chunk_size != FINAL_ANSWER_STREAM_CHUNK_SIZE
-        ):
-            logger.debug(
-                f"️ {generation_string} Setting Coqui stream chunk size to {FINAL_ANSWER_STREAM_CHUNK_SIZE} for generator synthesis."
-            )
-            self.engine.set_stream_chunk_size(FINAL_ANSWER_STREAM_CHUNK_SIZE)
-            self.current_stream_chunk_size = FINAL_ANSWER_STREAM_CHUNK_SIZE
 
         # Feed the generator to the stream
         self.stream.feed(generator)
@@ -497,33 +465,6 @@ class AudioProcessor:
             now = time.time()
             samples = len(chunk) // BPS
             play_duration = samples / SR
-
-            # --- Orpheus specific: Skip initial silence ---
-            if on_audio_chunk.first_call and self.engine_name == "orpheus":
-                if not hasattr(on_audio_chunk, "silent_chunks_count"):
-                    on_audio_chunk.silent_chunks_count = 0
-                    on_audio_chunk.silent_chunks_time = 0.0
-                    # Lower threshold potentially for final answers? Or keep consistent? Using 100 as in original code.
-                    on_audio_chunk.silence_threshold = 100
-
-                try:
-                    fmt = f"{samples}h"
-                    pcm_data = struct.unpack(fmt, chunk)
-                    avg_amplitude = np.abs(np.array(pcm_data)).mean()
-
-                    if avg_amplitude < on_audio_chunk.silence_threshold:
-                        on_audio_chunk.silent_chunks_count += 1
-                        on_audio_chunk.silent_chunks_time += play_duration
-                        logger.debug(
-                            f"️ {generation_string} Final Skipping silent chunk {on_audio_chunk.silent_chunks_count} (avg_amp: {avg_amplitude:.2f})"
-                        )
-                        return  # Skip
-                    elif on_audio_chunk.silent_chunks_count > 0:
-                        logger.debug(
-                            f"️ {generation_string} Final Skipped {on_audio_chunk.silent_chunks_count} silent chunks, saved {on_audio_chunk.silent_chunks_time * 1000:.2f}ms"
-                        )
-                except Exception as e:
-                    logger.warning(f"️ {generation_string} Final Error analyzing audio chunk for silence: {e}")
 
             # --- Timing and Logging ---
             if on_audio_chunk.first_call:

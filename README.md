@@ -1,23 +1,24 @@
-# 🎙️ Assistant Vocal Temps Réel (Français)
+# Assistant Vocal Temps Réel
 
 Assistant vocal conversationnel en temps réel utilisant les technologies de pointe pour la reconnaissance vocale, la génération de langage et la synthèse vocale.
 
-## 🌟 Fonctionnalités
+## Fonctionnalités
 
-- **Conversation vocale en temps réel** avec reconnaissance et synthèse instantanées
-- **Support complet du français** (transcription et synthèse)
-- **Interruptions naturelles** - vous pouvez interrompre l'assistant en parlant
-- **Turn detection intelligent** - détection automatique des fins de phrases
-- **Streaming LLM** - réponses fluides générées en temps réel
-- **Interface terminal simple** - pas besoin de navigateur
+- Conversation vocale en temps réel avec reconnaissance et synthèse instantanées
+- Support complet du français et de l'anglais (transcription et synthèse)
+- Interruptions naturelles - vous pouvez interrompre l'assistant en parlant
+- Turn detection intelligent - détection automatique des fins de phrases
+- Streaming LLM - réponses fluides générées en temps réel
+- Interface terminal simple - pas besoin de navigateur
+- Architecture multi-thread optimisée pour une latence minimale
 
-## 🛠️ Technologies
+## Technologies
 
 | Composant | Technologie | Description |
-|-----------|------------|-------------|
-| **STT** | Whisper tiny | Reconnaissance vocale rapide et précise |
-| **LLM** | Ollama llama3.2:3b | Génération de réponses intelligentes |
-| **TTS** | Kokoro (voix française) | Synthèse vocale naturelle |
+| --------- | ----------- | ----------- |
+| **STT** | Whisper small | Reconnaissance vocale rapide et précise |
+| **LLM** | Ollama ministral-3 | Génération de réponses intelligentes |
+| **TTS** | EdgeTTS | Synthèse vocale multilingue via Azure |
 
 ## 📋 Prérequis
 
@@ -93,18 +94,28 @@ Le système va :
 3. **Interrompez** l'assistant en recommençant à parler
 4. **Quittez** avec `Ctrl+C`
 
-## ⚙️ Configuration
+## Configuration
 
-### Changer la voix française
+### Changer le moteur TTS
 
-Éditez [tts_module.py](tts_module.py:123) :
+Le système supporte deux moteurs TTS. Éditez [main.py](main.py:28) :
 
 ```python
-self.engine = KokoroEngine(
-    voice="af_sky",  # Options: "af_sky", "af_bella", "af"
-    ...
-)
+TTS_MODEL = "edge_tts"  # Options: "edge_tts", "kokoro"
 ```
+
+### Changer la voix EdgeTTS
+
+Éditez [tts_module.py](tts_module.py:33) pour modifier les voix par langue :
+
+```python
+EDGE_TTS_VOICES = {
+    "fr": "fr-FR-DeniseNeural",  # Voix française
+    "en": "en-US-AvaMultilingualNeural",  # Voix anglaise
+}
+```
+
+Liste des voix disponibles : [Microsoft TTS Voices](https://learn.microsoft.com/azure/ai-services/speech-service/language-support)
 
 ### Modifier le prompt système
 
@@ -120,9 +131,13 @@ self.engine = KokoroEngine(
 
 **Note**: Les modèles plus grands sont plus précis mais plus lents.
 
-## 🏗️ Architecture
+## Architecture
 
-```
+### Vue d'ensemble
+
+Le système est conçu autour d'une architecture pipeline en temps réel avec trois composants principaux:
+
+```text
 ┌─────────────┐
 │ Microphone  │
 └──────┬──────┘
@@ -130,22 +145,22 @@ self.engine = KokoroEngine(
        ↓
 ┌─────────────────────┐
 │  STT (Whisper)      │
-│  - Modèle: tiny     │
-│  - Langue: fr       │
+│  - Modèle: small    │
+│  - Langue: fr/en    │
 └──────┬──────────────┘
        │ Texte transcrit
        ↓
 ┌─────────────────────┐
 │ LLM (Ollama)        │
-│  - llama3.2:3b      │
+│  - ministral-3      │
 │  - Streaming        │
 └──────┬──────────────┘
        │ Réponse (chunks)
        ↓
 ┌─────────────────────┐
-│  TTS (Kokoro)       │
-│  - Voix: af_sky     │
-│  - Français         │
+│  TTS (EdgeTTS)      │
+│  - Voice: Multi     │
+│  - Streaming        │
 └──────┬──────────────┘
        │ Audio
        ↓
@@ -154,14 +169,77 @@ self.engine = KokoroEngine(
 └─────────────┘
 ```
 
+### Architecture Multi-Thread
+
+Le système utilise trois threads workers indépendants pour minimiser la latence:
+
+#### Thread 1: LLM Worker
+
+- Écoute les nouvelles entrées utilisateur via `new_input_event`
+- Génère les réponses en streaming via l'API Ollama
+- Place chaque chunk de texte dans `text_queue`
+- Gère l'interruption via `abort_event`
+
+#### Thread 2: TTS Worker
+
+- Consomme les chunks de texte de `text_queue`
+- Synthétise l'audio via EdgeTTS ou Kokoro
+- Place les chunks audio dans `audio_queue`
+- Supporte l'interruption pour les réponses réactives
+
+#### Thread 3: Audio Player Worker
+
+- Lit les chunks audio de `audio_queue`
+- Joue l'audio via PyAudio (format: PCM 16-bit, 24kHz mono)
+- Bufferise 5 chunks minimum avant de commencer
+- Arrêt immédiat sur interruption utilisateur
+
+### Flux de données
+
+```text
+USER INPUT → STT → [text_queue] → LLM → [text_queue] → TTS → [audio_queue] → Audio Player → SPEAKERS
+                     ↑                                              ↑
+                     └──────── abort_event (interruption) ─────────┘
+```
+
+### Gestion des interruptions
+
+Le système supporte deux types d'interruptions:
+
+1. **Interruption par la voix**: Détectée par `stt_module` via `on_recording_start_callback`
+2. **Détection de silence**: Gérée par `silence_active_callback` qui surveille l'état du silence
+
+Quand une interruption est détectée:
+
+- `abort_event` est activé
+- Les trois threads arrêtent leur traitement en cours
+- Les queues `text_queue` et `audio_queue` sont vidées
+- Une nouvelle génération peut démarrer
+
+### Turn Detection
+
+Le module `turn_detection.py` calcule dynamiquement le temps d'attente optimal avant de finaliser une transcription, basé sur:
+
+- La longueur du texte transcrit
+- La présence de ponctuation finale
+- La latence estimée du pipeline (LLM + TTS)
+
+États du turn detection:
+
+- **Cold**: Aucune activité vocale
+- **Potential End**: Silence détecté après ponctuation
+- **Hot**: Prêt à finaliser la transcription
+- **Final**: Transcription finalisée et envoyée au LLM
+
 ### Composants principaux
 
 - **[main.py](main.py)** - Point d'entrée et gestion du cycle de vie
-- **[conversation_manager.py](conversation_manager.py)** - Orchestration des 3 composants
+- **[conversation_manager.py](conversation_manager.py)** - Orchestration des 3 threads workers
 - **[stt_module.py](stt_module.py)** - Reconnaissance vocale avec RealtimeSTT
-- **[tts_module.py](tts_module.py)** - Synthèse vocale avec RealtimeTTS
+- **[tts_module.py](tts_module.py)** - Synthèse vocale avec EdgeTTS/Kokoro
 - **[llm_module.py](llm_module.py)** - Interface avec Ollama
 - **[turn_detection.py](turn_detection.py)** - Détection intelligente des tours de parole
+- **[text_similarity.py](text_similarity.py)** - Comparaison de textes pour déduplication
 
 ## 🐛 Dépannage
 
@@ -180,92 +258,97 @@ ollama list  # Doit afficher llama3.2:3b
 - **macOS**: Vérifiez les permissions micro dans Préférences Système → Confidentialité
 - **Linux**: Vérifiez que votre utilisateur est dans le groupe `audio`
 
-### "Kokoro voice af_sky not found"
+### "EdgeTTS voice not found"
 
-Essayez une autre voix française :
-- `af_bella`
-- `af` (voix générique)
+Vérifiez que la voix est correctement spécifiée dans [tts_module.py](tts_module.py:33). Les voix EdgeTTS nécessitent une connexion Internet.
 
-### Audio haché ou saccadé
+### Audio haché ou saccadé avec Kokoro
 
-Augmentez la taille des chunks dans [tts_module.py](tts_module.py:102) :
+Si vous utilisez le moteur Kokoro, augmentez la taille des buffers dans la configuration du moteur.
 
-```python
-self.current_stream_chunk_size = 30  # Augmenter de 8 à 30
-```
-
-## 📊 Performance
+## Performance
 
 | Métrique | Valeur typique |
-|----------|----------------|
+| -------- | -------------- |
 | Latence STT | ~0.5-1s |
-| Latence LLM (TTFT) | ~1-2s |
-| Latence TTS | ~0.3-0.5s |
-| **Latence totale** | **~2-3s** |
+| Latence LLM (TTFT) | ~0.5-1s |
+| Latence TTS | ~0.2-0.4s |
+| **Latence totale** | **~1.5-2.5s** |
 
-*Mesures sur MacBook M1/M2 avec llama3.2:3b*
+Mesures effectuées sur MacBook M1/M2 avec ministral-3 et EdgeTTS.
 
-## 📝 Structure du projet
+## Structure du projet
 
-```
+```text
 realtime-voice-assistant/
 ├── PLAN.md                  # Plan d'implémentation détaillé
-├── README.md                # Ce fichier
-├── main.py                  # Point d'entrée
-├── conversation_manager.py  # Orchestrateur principal
-├── stt_module.py           # Module STT (Whisper)
-├── tts_module.py           # Module TTS (Kokoro)
-├── llm_module.py           # Module LLM (Ollama)
-├── turn_detection.py       # Détection des tours de parole
-├── text_context.py         # Analyse de contexte textuel
-├── text_similarity.py      # Similarité de textes
-├── colors.py               # Utilitaires couleurs terminal
-├── logsetup.py             # Configuration du logging
-├── system_prompt.txt       # Prompt système de l'assistant
-├── pyproject.toml          # Configuration uv + dépendances
-└── .venv/                  # Environnement virtuel Python
+├── README.md                # Ce fichier (documentation)
+├── main.py                  # Point d'entrée de l'application
+├── conversation_manager.py  # Orchestrateur des 3 threads workers
+├── stt_module.py            # Module STT (Whisper + RealtimeSTT)
+├── tts_module.py            # Module TTS (EdgeTTS / Kokoro)
+├── llm_module.py            # Module LLM (interface Ollama)
+├── turn_detection.py        # Détection intelligente des tours de parole
+├── text_similarity.py       # Comparaison et déduplication de textes
+├── logsetup.py              # Configuration du système de logging
+├── system_prompt.txt        # Prompt système de l'assistant
+├── pyproject.toml           # Configuration uv + dépendances Python
+└── .venv/                   # Environnement virtuel Python
 ```
 
-## 🔧 Développement
+## Développement
 
 ### Lancer en mode debug
 
-```bash
-# Modifier le niveau de log dans main.py
-setup_logging(logging.DEBUG)
-```
-
-### Tester un composant isolément
+Modifiez le niveau de log dans [main.py](main.py:39) :
 
 ```python
-# Test STT
-uv run python -c "from stt_module import TranscriptionProcessor; ..."
-
-# Test TTS
-uv run python -c "from tts_module import AudioProcessor; ..."
+setup_logging(logging.DEBUG)  # Au lieu de logging.INFO
 ```
 
-## 🎯 Améliorations futures
+### Architecture des callbacks
 
-- [ ] Commandes vocales ("stop", "recommence")
-- [ ] Historique persistant des conversations
-- [ ] Choix de voix via arguments CLI
-- [ ] Indicateur visuel d'activité (animation terminal)
-- [ ] Support multilingue (en/fr switchable)
-- [ ] Métriques de latence en temps réel
-- [ ] Mode "écoute continue" vs "push-to-talk"
+Le système utilise des callbacks pour la communication entre modules:
 
-## 📜 Licence
+- `full_transcription_callback`: STT → ConversationManager (texte finalisé)
+- `on_recording_start_callback`: STT → ConversationManager (interruption détectée)
+- `silence_active_callback`: STT → ConversationManager (état du silence)
+- `on_first_audio_chunk_synthesize`: TTS → ConversationManager (premier chunk audio)
+
+### Tests des composants
+
+```bash
+# Test du module LLM
+uv run python llm_module.py
+
+# Test du module TTS (nécessite EdgeTTS ou Kokoro)
+uv run python -c "from tts_module import AudioProcessor; tts = AudioProcessor('edge_tts', 'fr'); print('TTS OK')"
+```
+
+## Améliorations futures
+
+- Commandes vocales (stop, recommence, etc.)
+- Historique persistant des conversations
+- Choix de voix et moteur TTS via arguments CLI
+- Support multilingue avec changement de langue en temps réel
+- Métriques de latence et performance en temps réel
+- Mode push-to-talk optionnel
+- Interface web optionnelle pour monitoring
+
+## Licence
 
 Ce projet est basé sur le projet [RealtimeVoiceChat](https://github.com/KoljaB/RealtimeVoiceChat) et utilise les bibliothèques open-source suivantes:
+
 - RealtimeSTT (MIT)
 - RealtimeTTS (MIT)
 - Transformers (Apache 2.0)
 - Ollama (MIT)
+- edge-tts (GPL-3.0)
 
-## 🙏 Remerciements
+## Remerciements
 
-- [Whisper](https://github.com/openai/whisper) par OpenAI
-- [Ollama](https://ollama.ai) pour l'inférence LLM locale
-- [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) pour la synthèse vocale française
-- [RealtimeSTT](https://github.com/KoljaB/RealtimeSTT) et [RealtimeTTS](https://github.com/KoljaB/RealtimeTTS) par KoljaB
+- [Whisper](https://github.com/openai/whisper) par OpenAI - reconnaissance vocale de haute qualité
+- [Ollama](https://ollama.ai) - inférence LLM locale optimisée
+- [EdgeTTS](https://github.com/rany2/edge-tts) - synthèse vocale via Microsoft Azure
+- [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) - synthèse vocale multilingue alternative
+- [RealtimeSTT](https://github.com/KoljaB/RealtimeSTT) et [RealtimeTTS](https://github.com/KoljaB/RealtimeTTS) par KoljaB - frameworks temps réel

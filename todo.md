@@ -1,4 +1,8 @@
-- Propose more TTS (such as EdgeTTS and orpheus)
-- Check Unused code to remove it
-- Clean and Uniform all code
-- Explain code (Architecture, Logic and Details like threads, turn activation etc...) in README.md
+# TODO
+
+All tasks completed!
+
+- ✓ Added EdgeTTS with "en-US-AvaMultilingualNeural" voice and removed Orpheus TTS
+- ✓ Checked and removed unused code (text_context.py, Coqui references)
+- ✓ Cleaned and uniformed all code
+- ✓ Updated README with architecture, logic and technical details (threads, turn detection, etc.)

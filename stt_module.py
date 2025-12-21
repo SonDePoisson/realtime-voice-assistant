@@ -91,7 +91,6 @@ class TranscriptionProcessor:
         before_final_sentence: Optional[Callable[[Optional[np.ndarray], Optional[str]], bool]] = None,
         silence_active_callback: Optional[Callable[[bool], None]] = None,
         on_recording_start_callback: Optional[Callable[[], None]] = None,
-        is_orpheus: bool = False,
         local: bool = True,
         pipeline_latency: float = 0.5,
         recorder_config: Optional[Dict[str, Any]] = None,  # Allow passing custom config
@@ -109,9 +108,7 @@ class TranscriptionProcessor:
             before_final_sentence: Callback triggered just before the recorder finalizes transcription. Receives audio copy and current real-time text. Return True to potentially influence recorder behavior (if supported).
             silence_active_callback: Callback triggered when silence detection state changes. Receives boolean (True if silence is active).
             on_recording_start_callback: Callback triggered when the recorder starts recording after silence or wake word.
-            is_orpheus: Flag indicating if specific timing adjustments for 'Orpheus' mode should be used.
             local: Flag used by TurnDetection (if enabled) to indicate local vs remote processing context.
-            tts_allowed_event: An event that might be set when TTS synthesis is allowed (currently unused in provided logic).
             pipeline_latency: Estimated latency of the downstream processing pipeline in seconds. Used for timing calculations.
             recorder_config: Optional dictionary to override default RealtimeSTT recorder configuration.
         """
@@ -124,7 +121,6 @@ class TranscriptionProcessor:
         self.before_final_sentence = before_final_sentence
         self.silence_active_callback = silence_active_callback
         self.on_recording_start_callback = on_recording_start_callback
-        self.is_orpheus = is_orpheus
         self.pipeline_latency = pipeline_latency
         self.recorder: Optional[AudioToTextRecorder] = None
         self.on_wakeword_detection_start: Optional[Callable] = None  # Note: Seems unused
@@ -239,13 +235,6 @@ class TranscriptionProcessor:
                     # Ensure the hot condition has a minimum meaningful duration
                     if start_hot_condition_time < self._MIN_HOT_CONDITION_DURATION_S:
                         start_hot_condition_time = self._MIN_HOT_CONDITION_DURATION_S
-
-                    # Adjust potential_sentence_end_time based on Orpheus mode
-                    if self.is_orpheus:
-                        # For Orpheus, ensure potential end detection doesn't happen too early relative to hot state
-                        orpheus_potential_end_time = silence_waiting_time - self._HOT_THRESHOLD_OFFSET_S
-                        if potential_sentence_end_time < orpheus_potential_end_time:
-                            potential_sentence_end_time = orpheus_potential_end_time
 
                     # --- Trigger Actions Based on Timing ---
 

@@ -55,7 +55,7 @@ class ConversationManager:
         Args:
             llm_provider: provider LLM ("ollama")
             llm_model: Nom du modèle LLM
-            tts_engine: Moteur TTS ("kokoro", "orpheus")
+            tts_engine: Moteur TTS ("kokoro", "edge_tts")
             system_prompt_file: Chemin vers le fichier de prompt système
         """
         logger.debug("-- [Init] ConversationManager")
