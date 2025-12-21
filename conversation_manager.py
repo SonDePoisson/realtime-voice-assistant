@@ -79,7 +79,8 @@ class ConversationManager:
 
         # Connecter les callbacks STT
         self.stt.full_transcription_callback = self._on_user_input
-        self.stt.on_recording_start = self._on_user_interrupt
+        self.stt.on_recording_start_callback = self._on_user_interrupt
+        self.stt.silence_active_callback = self._on_silence_state_changed
 
         # TODO : VERIFY TURN DETECTION
         # Turn detection #
@@ -153,8 +154,22 @@ class ConversationManager:
 
     def _on_user_interrupt(self):
         """Callback appelé quand l'utilisateur commence à parler (interruption)"""
-        logger.debug("-- [INTERRUPTION]")
+        logger.debug("-- [INTERRUPTION] Recording started")
         self._abort_current()
+
+    def _on_silence_state_changed(self, silence_active: bool):
+        """
+        Callback appelé quand l'état du silence change.
+
+        Args:
+            silence_active: True si le silence est actif, False si l'utilisateur parle
+        """
+        if not silence_active:
+            # L'utilisateur vient de commencer à parler
+            # Interrompre la génération en cours si elle existe
+            if self.current_generation and not self.current_generation.audio_completed:
+                logger.debug("-- [INTERRUPTION] User started speaking, aborting current generation")
+                self._abort_current()
 
     def _llm_worker(self):
         """
@@ -187,7 +202,7 @@ class ConversationManager:
                 ):
                     # Vérifier si on doit arrêter
                     if self.abort_event.is_set():
-                        logger.debug("Génération LLM annulée")
+                        logger.debug("-- [INTERRUPTION] LLM generation aborted")
                         break
 
                     # Ajouter le chunk à la queue pour TTS
@@ -242,6 +257,7 @@ class ConversationManager:
                         if chunk is None:
                             break
                         if self.abort_event.is_set():
+                            logger.debug("-- [INTERRUPTION] TTS text streaming aborted")
                             break
                         yield chunk
                     except queue.Empty:
@@ -314,6 +330,10 @@ class ConversationManager:
                         try:
                             chunk = gen.audio_queue.get(timeout=0.1)
                             if chunk is None:  # Signal de fin
+                                break
+                            # Vérifier l'interruption avant d'écrire le chunk
+                            if self.abort_event.is_set():
+                                logger.debug("-- [INTERRUPTION] Stopping audio playback immediately")
                                 break
                             stream.write(chunk)
                         except queue.Empty:
