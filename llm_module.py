@@ -1,12 +1,11 @@
 # llm_module.py
-import dotenv
 import logging
 import os
 import sys
 import time
 import json
 import uuid
-import subprocess  # <-- Restored usage
+import subprocess
 from typing import Generator, List, Dict, Optional, Any
 from threading import Lock
 
@@ -18,7 +17,7 @@ try:
     REQUESTS_AVAILABLE = True
 except ImportError:
     REQUESTS_AVAILABLE = False
-    logging.warning("️ requests library not installed. Ollama backend (direct HTTP) will not function.")
+    logging.warning("️ requests library not installed. Ollama provider (direct HTTP) will not function.")
     if sys.version_info >= (3, 9):
         Session = Any | None
     else:
@@ -142,18 +141,18 @@ def _run_ollama_ps():
 # --- LLM Class ---
 class LLM:
     """
-    Provides a unified interface for interacting with various LLM backends.
+    Provides a unified interface for interacting with various LLM providers.
 
     Supports Ollama (via direct HTTP)
     Handles client initialization, streaming generation, request cancellation,
     system prompts, and basic connection management including an optional `ollama ps` check.
     """
 
-    SUPPORTED_BACKENDS = ["ollama"]
+    SUPPORTED_PROVIDERS = ["ollama"]
 
     def __init__(
         self,
-        backend: str,
+        provider: str,
         model: str,
         system_prompt: Optional[str] = None,
         api_key: Optional[str] = None,
@@ -161,27 +160,27 @@ class LLM:
         no_think: bool = False,
     ):
         """
-        Initializes the LLM interface for a specific backend and model.
+        Initializes the LLM interface for a specific provider and model.
 
         Args:
-            backend: The name of the LLM backend to use (e.g., "ollama").
-            model: The identifier for the specific model to use within the backend.
+            provider: The name of the LLM provider to use (e.g., "ollama").
+            model: The identifier for the specific model to use within the provider.
             system_prompt: An optional system prompt to prepend to conversations.
-            base_url: Optional base URL for the backend API (overrides defaults/env vars).
+            base_url: Optional base URL for the provider API (overrides defaults/env vars).
             no_think: Experimental flag (currently unused in core logic, intended for future prompt modification).
 
         Raises:
-            ValueError: If an unsupported backend is specified.
-            ImportError: If required libraries for the selected backend are not installed.
+            ValueError: If an unsupported provider is specified.
+            ImportError: If required libraries for the selected provider are not installed.
         """
-        # logger.info(f"️ Initializing LLM with backend: {backend}, model: {model}, system_prompt: {system_prompt}")
-        logger.info(f"️Initializing LLM with backend: {backend}, model: {model}, system_prompt: ...")
-        self.backend = backend.lower()
-        if self.backend not in self.SUPPORTED_BACKENDS:
-            raise ValueError(f"Unsupported backend '{backend}'. Supported: {self.SUPPORTED_BACKENDS}")
+        # logger.info(f"️ Initializing LLM with provider: {provider}, model: {model}, system_prompt: {system_prompt}")
+        logger.info(f"️Initializing LLM with provider: {provider}, model: {model}, system_prompt: ...")
+        self.provider = provider.lower()
+        if self.provider not in self.SUPPORTED_PROVIDERS:
+            raise ValueError(f"Unsupported provider '{provider}'. Supported: {self.SUPPORTED_PROVIDERS}")
 
-        if self.backend == "ollama" and not REQUESTS_AVAILABLE:
-            raise ImportError("requests library is required for the 'ollama' backend but not installed.")
+        if self.provider == "ollama" and not REQUESTS_AVAILABLE:
+            raise ImportError("requests library is required for the 'ollama' provider but not installed.")
 
         self.model = model
         self.system_prompt = system_prompt
@@ -197,11 +196,11 @@ class LLM:
         self._requests_lock = Lock()
         self._ollama_connection_ok: bool = False  # Added explicit init
 
-        logger.info(f"️Configuring LLM instance: backend='{self.backend}', model='{self.model}'")
+        logger.info(f"️Configuring LLM instance: provider='{self.provider}', model='{self.model}'")
 
-        self.effective_ollama_url = self._base_url or OLLAMA_BASE_URL if self.backend == "ollama" else None
+        self.effective_ollama_url = self._base_url or OLLAMA_BASE_URL if self.provider == "ollama" else None
 
-        if self.backend == "ollama" and self.effective_ollama_url:
+        if self.provider == "ollama" and self.effective_ollama_url:
             url = self.effective_ollama_url
             if not url.startswith(("http://", "https://")):
                 url = "http://" + url
@@ -209,9 +208,9 @@ class LLM:
             self.effective_ollama_url = url
             logger.debug(f"️Normalized Ollama URL: {self.effective_ollama_url}")
 
-        if self.backend == "ollama" and REQUESTS_AVAILABLE:
+        if self.provider == "ollama" and REQUESTS_AVAILABLE:
             self.ollama_session = requests.Session()
-            logger.info("Initialized requests.Session for Ollama backend.")
+            logger.info("Initialized requests.Session for Ollama provider.")
 
         self.system_prompt_message = None
         if self.system_prompt:
@@ -223,7 +222,7 @@ class LLM:
 
     def _lazy_initialize_clients(self) -> bool:
         """
-        Initializes backend clients or checks connections on first use (thread-safe).
+        Initializes provider clients or checks connections on first use (thread-safe).
 
         Creates the appropriate HTTP client and performs
         an initial connection check for Ollama. If the Ollama check fails, optionally
@@ -234,22 +233,22 @@ class LLM:
             False otherwise.
         """
         if self._client_initialized:
-            if self.backend == "ollama":
+            if self.provider == "ollama":
                 return self.ollama_session is not None and self._ollama_connection_ok  # Check flag
             return False
 
         with self._client_init_lock:
             if self._client_initialized:  # Double check
-                if self.backend == "ollama":
+                if self.provider == "ollama":
                     return self.ollama_session is not None and self._ollama_connection_ok
                 return False
 
-            logger.debug(f" Lazy initializing/checking connection for backend: {self.backend}")
+            logger.debug(f" Lazy initializing/checking connection for provider: {self.provider}")
             init_ok = False
             self._ollama_connection_ok = False  # Reset Ollama specific flag
 
             try:
-                if self.backend == "ollama":
+                if self.provider == "ollama":
                     if self.ollama_session and self.effective_ollama_url:
                         # Initial direct check
                         initial_check_ok = _check_ollama_connection(self.effective_ollama_url, self.ollama_session)
@@ -289,17 +288,17 @@ class LLM:
                         init_ok = False
 
                 if init_ok:
-                    logger.info(f" Client/Connection initialized successfully for backend: {self.backend}.")
+                    logger.info(f" Client/Connection initialized successfully for provider: {self.provider}.")
                 else:
-                    logger.error(f" Initialization failed for backend: {self.backend}.")
+                    logger.error(f" Initialization failed for provider: {self.provider}.")
             except Exception as e:
-                logger.exception(f" Critical failure during lazy initialization for {self.backend}: {e}")
+                logger.exception(f" Critical failure during lazy initialization for {self.provider}: {e}")
                 init_ok = False
             finally:
                 # Mark as initialized regardless of success/failure
                 self._client_initialized = True
                 # Ensure connection flag reflects reality if init failed
-                if self.backend == "ollama" and not init_ok:
+                if self.provider == "ollama" and not init_ok:
                     self._ollama_connection_ok = False
 
             return init_ok
@@ -399,7 +398,7 @@ class LLM:
 
         Args:
             request_id: The unique ID for the generation request.
-            request_type: The backend type ("ollama").
+            request_type: The provider type ("ollama").
             stream_obj: The underlying stream/response object associated with the request.
         """
         with self._requests_lock:
@@ -454,7 +453,7 @@ class LLM:
 
         Runs a simple, short generation task ("Respond with only the word 'OK'.")
         to trigger lazy initialization (including potential `ollama ps` check)
-        and ensure the backend is responsive before actual use. Includes basic retry logic.
+        and ensure the provider is responsive before actual use. Includes basic retry logic.
 
         Args:
             max_retries: The number of times to retry the generation task if a
@@ -465,18 +464,18 @@ class LLM:
             False if initialization or generation failed after retries.
         """
         prompt = "Respond with only the word 'OK'."
-        logger.info(f" Attempting prewarm for '{self.model}' on backend '{self.backend}'...")
+        logger.info(f" Attempting prewarm for '{self.model}' on provider '{self.provider}'...")
 
         # Lazy initialization now includes the 'ollama ps' logic if needed
         if not self._lazy_initialize_clients():
-            logger.error(" Prewarm failed: Could not initialize backend client/connection.")
+            logger.error(" Prewarm failed: Could not initialize provider client/connection.")
             return False
 
         attempts = 0
         last_error = None
         while attempts <= max_retries:
             prewarm_start_time = time.time()
-            prewarm_request_id = f"prewarm-{self.backend}-{uuid.uuid4()}"
+            prewarm_request_id = f"prewarm-{self.provider}-{uuid.uuid4()}"
             generator = None
             full_response = ""
             token_count = 0
@@ -519,11 +518,9 @@ class LLM:
                 return True
 
             except (
-                APIConnectionError,
                 requests.exceptions.ConnectionError,
                 ConnectionError,
                 TimeoutError,
-                APITimeoutError,
                 requests.exceptions.Timeout,
             ) as e:
                 last_error = e
@@ -547,8 +544,6 @@ class LLM:
                     )
                     return False
             except (
-                APIError,
-                RateLimitError,
                 requests.exceptions.RequestException,
                 RuntimeError,
             ) as e:
@@ -596,24 +591,24 @@ class LLM:
         **kwargs: Any,
     ) -> Generator[str, None, None]:
         """
-        Generates text using the configured backend, yielding tokens as a stream.
+        Generates text using the configured provider, yielding tokens as a stream.
 
         Handles lazy initialization (including potential `ollama ps` check), message formatting,
-        backend-specific API calls, stream registration, token yielding, and resource cleanup.
+        provider-specific API calls, stream registration, token yielding, and resource cleanup.
 
         Args:
             text: The user's input prompt/text.
             history: An optional list of previous messages (dicts with "role" and "content").
             use_system_prompt: If True, prepends the configured system prompt (if any).
             request_id: An optional unique ID for this generation request. If None, one is generated.
-            **kwargs: Additional backend-specific keyword arguments (e.g., temperature, top_p, stop sequences).
+            **kwargs: Additional provider-specific keyword arguments (e.g., temperature, top_p, stop sequences).
 
         Yields:
             str: Individual tokens (or small chunks of text) as they are generated by the LLM.
 
         Raises:
-            RuntimeError: If the backend client fails to initialize.
-            ConnectionError: If communication with the backend fails (initial connection or during streaming).
+            RuntimeError: If the provider client fails to initialize.
+            ConnectionError: If communication with the provider fails (initial connection or during streaming).
             ValueError: If configuration is invalid (e.g., missing Ollama URL).
             requests.exceptions.RequestException: For Ollama HTTP request errors.
             Exception: For other unexpected errors during the generation process.
@@ -621,13 +616,13 @@ class LLM:
         # Lazy initialization now includes the 'ollama ps' logic if needed
         if not self._lazy_initialize_clients():
             # Provide a clearer error if initialization failed
-            if self.backend == "ollama" and not self._ollama_connection_ok:
+            if self.provider == "ollama" and not self._ollama_connection_ok:
                 raise ConnectionError(
-                    f"LLM backend '{self.backend}' connection failed. Could not connect to {self.effective_ollama_url} even after attempting 'ollama ps'. Check server status and configuration."
+                    f"LLM provider '{self.provider}' connection failed. Could not connect to {self.effective_ollama_url} even after attempting 'ollama ps'. Check server status and configuration."
                 )
-            raise RuntimeError(f"LLM backend '{self.backend}' client failed to initialize.")
+            raise RuntimeError(f"LLM provider '{self.provider}' client failed to initialize.")
 
-        req_id = request_id if request_id else f"{self.backend}-{uuid.uuid4()}"
+        req_id = request_id if request_id else f"{self.provider}-{uuid.uuid4()}"
         logger.info(f"Starting generation (Request ID: {req_id})")
 
         messages = []
@@ -648,7 +643,7 @@ class LLM:
         stream_object_to_register = None  # This is the object we need to close on cancel
 
         try:
-            if self.backend == "ollama":
+            if self.provider == "ollama":
                 if self.ollama_session is None:
                     raise RuntimeError("Ollama session not initialized (should have been caught by lazy_init).")
                 if not self.effective_ollama_url:
@@ -683,7 +678,7 @@ class LLM:
 
             else:
                 # This case should technically be caught by __init__
-                raise ValueError(f"Backend '{self.backend}' generation logic not implemented.")
+                raise ValueError(f"provider '{self.provider}' generation logic not implemented.")
 
             logger.info(f" Finished generating stream successfully (request_id: {req_id})")
 
@@ -728,7 +723,7 @@ class LLM:
                     logger.debug(f"️ [{req_id}] Request already removed from tracking before finally block completion.")
             logger.debug(f"ℹ️ [{req_id}] Exiting finally block. Active requests: {len(self._active_requests)}")
 
-    # --- Backend-Specific Chunk Yielding Helpers ---
+    # --- provider-Specific Chunk Yielding Helpers ---
     def _yield_ollama_chunks(self, response: requests.Response, request_id: str) -> Generator[str, None, None]:
         """
         Iterates over an Ollama HTTP response stream, decoding JSON lines and yielding content.
@@ -902,7 +897,7 @@ class LLM:
         Uses a fixed, predefined prompt designed to elicit a somewhat predictable
         response length. Times the generation process from the moment the generator
         is obtained until the target number of tokens is yielded or generation ends.
-        Ensures the backend client is initialized first.
+        Ensures the provider client is initialized first.
 
         Args:
             num_tokens: The target number of tokens to generate before stopping measurement.
@@ -920,7 +915,7 @@ class LLM:
 
         # Ensure client is ready (handles lazy init + connection checks + ps fallback)
         if not self._lazy_initialize_clients():
-            logger.error(f"️ Measurement failed: Could not initialize backend client/connection for {self.backend}.")
+            logger.error(f"️ Measurement failed: Could not initialize provider client/connection for {self.provider}.")
             return None
 
         # --- Define specific prompts for measurement ---
@@ -933,7 +928,7 @@ class LLM:
         ]
         # ---------------------------------------------
 
-        req_id = f"measure-{self.backend}-{uuid.uuid4()}"
+        req_id = f"measure-{self.provider}-{uuid.uuid4()}"
         logger.info(
             f"️ Measuring inference time for {num_tokens} tokens (Request ID: {req_id}). Using fixed measurement prompt."
         )
@@ -978,7 +973,7 @@ class LLM:
 
             actual_tokens_generated = token_count
 
-        except (ConnectionError, APIError, RuntimeError, Exception) as e:
+        except (ConnectionError, RuntimeError, Exception) as e:
             logger.error(
                 f"️ Error during inference time measurement ({req_id}): {e}",
                 exc_info=False,
@@ -1015,7 +1010,7 @@ class LLM:
 
         logger.info(
             f"️ Measured ~{duration_ms:.2f} ms for {actual_tokens_generated} tokens "
-            f"(target: {num_tokens}) for model '{self.model}' on backend '{self.backend}' using fixed prompt. (Request ID: {req_id})"
+            f"(target: {num_tokens}) for model '{self.model}' on provider '{self.provider}' using fixed prompt. (Request ID: {req_id})"
         )
 
         # Return the time taken for the actual tokens generated.
@@ -1056,7 +1051,7 @@ class LLMGenerationContext:
         self.use_system_prompt = use_system_prompt
         self.kwargs = kwargs
         self.generator: Optional[Generator[str, None, None]] = None
-        self.request_id: str = f"ctx-{llm.backend}-{uuid.uuid4()}"
+        self.request_id: str = f"ctx-{llm.provider}-{uuid.uuid4()}"
         self._entered: bool = False
 
     def __enter__(self) -> Generator[str, None, None]:
@@ -1158,7 +1153,7 @@ if __name__ == "__main__":
             main_logger.info(f"\n️ --- Initializing Ollama ({ollama_model_env}) ---")
             # Pass the model name fetched from env var
             ollama_llm = LLM(
-                backend="ollama",
+                provider="ollama",
                 model=ollama_model_env,
                 system_prompt="You are concise and helpful.",
             )

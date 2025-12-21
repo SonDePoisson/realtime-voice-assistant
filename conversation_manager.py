@@ -1,4 +1,6 @@
 import logging
+import os
+import sys
 
 import threading
 import queue
@@ -9,7 +11,19 @@ from stt_module import TranscriptionProcessor, USE_TURN_DETECTION
 from tts_module import AudioProcessor
 from llm_module import LLM
 
-logger = logging.getLogger(__name__)
+# Configure logging
+# Use the root logger configured by the main application if available, else basic config
+log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
+log_level = getattr(logging, log_level_str, logging.INFO)
+# Check if root logger already has handlers (likely configured by main app)
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        stream=sys.stdout,
+    )  # Default to stdout if not configured
+logger = logging.getLogger(__name__)  # Get logger for this module
+logger.setLevel(log_level)  # Ensure module logger respects level
 
 
 class Generation:
@@ -48,7 +62,7 @@ class ConversationManager:
         Initialise le gestionnaire de conversation.
 
         Args:
-            llm_provider: Backend LLM ("ollama")
+            llm_provider: provider LLM ("ollama")
             llm_model: Nom du modèle LLM
             tts_engine: Moteur TTS ("kokoro", "orpheus")
             system_prompt_file: Chemin vers le fichier de prompt système
@@ -61,7 +75,7 @@ class ConversationManager:
         # Initialiser les composants
         logger.info("Initialisation du LLM...")
         self.llm = LLM(
-            backend=llm_provider,
+            provider=llm_provider,
             model=llm_model,
             system_prompt=self.system_prompt,
             no_think=False,
