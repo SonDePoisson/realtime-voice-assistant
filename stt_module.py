@@ -4,18 +4,18 @@ from turn_detection import strip_ending_punctuation
 from text_similarity import TextSimilarity
 import numpy as np
 import threading
-import textwrap
-import json
 import copy
 import time
 import re
 from typing import Optional, Callable, Any, Dict, List
 
+from RealtimeSTT import AudioToTextRecorder
+from turn_detection import TurnDetection
+
 logger = logging.getLogger(__name__)
 
 # --- Configuration Flags ---
 USE_TURN_DETECTION = True
-START_STT_SERVER = False  # Set to True to use the client/server version of RealtimeSTT
 
 # --- Recorder Configuration (Moved here for clarity, can be externalized) ---
 # Default config if none provided to constructor
@@ -47,15 +47,6 @@ DEFAULT_RECORDER_CONFIG: Dict[str, Any] = {
     "initial_prompt_realtime": "The sky is blue. When the sky... She walked home. Because he... Today is sunny. If only I...",
     "faster_whisper_vad_filter": False,
 }
-
-
-if START_STT_SERVER:
-    from RealtimeSTT import AudioToTextRecorderClient
-else:
-    from RealtimeSTT import AudioToTextRecorder
-
-if USE_TURN_DETECTION:
-    from turn_detection import TurnDetection
 
 
 INT16_MAX_ABS_VALUE: float = 32768.0
@@ -91,24 +82,17 @@ class TranscriptionProcessor:
 
     def __init__(
         self,
-        source_language: str = "en",
+        source_language: str = "fr",
         realtime_transcription_callback: Optional[Callable[[str], None]] = None,
         full_transcription_callback: Optional[Callable[[str], None]] = None,
         potential_full_transcription_callback: Optional[Callable[[str], None]] = None,
-        potential_full_transcription_abort_callback: Optional[
-            Callable[[], None]
-        ] = None,
+        potential_full_transcription_abort_callback: Optional[Callable[[], None]] = None,
         potential_sentence_end: Optional[Callable[[str], None]] = None,
-        before_final_sentence: Optional[
-            Callable[[Optional[np.ndarray], Optional[str]], bool]
-        ] = None,
+        before_final_sentence: Optional[Callable[[Optional[np.ndarray], Optional[str]], bool]] = None,
         silence_active_callback: Optional[Callable[[bool], None]] = None,
         on_recording_start_callback: Optional[Callable[[], None]] = None,
         is_orpheus: bool = False,
         local: bool = True,
-        tts_allowed_event: Optional[
-            threading.Event
-        ] = None,  # Note: This seems unused in the original code provided
         pipeline_latency: float = 0.5,
         recorder_config: Optional[Dict[str, Any]] = None,  # Allow passing custom config
     ) -> None:
@@ -134,24 +118,18 @@ class TranscriptionProcessor:
         self.source_language = source_language
         self.realtime_transcription_callback = realtime_transcription_callback
         self.full_transcription_callback = full_transcription_callback
-        self.potential_full_transcription_callback = (
-            potential_full_transcription_callback
-        )
-        self.potential_full_transcription_abort_callback = (
-            potential_full_transcription_abort_callback
-        )
+        self.potential_full_transcription_callback = potential_full_transcription_callback
+        self.potential_full_transcription_abort_callback = potential_full_transcription_abort_callback
         self.potential_sentence_end = potential_sentence_end
         self.before_final_sentence = before_final_sentence
         self.silence_active_callback = silence_active_callback
         self.on_recording_start_callback = on_recording_start_callback
         self.is_orpheus = is_orpheus
         self.pipeline_latency = pipeline_latency
-        self.recorder: Optional[AudioToTextRecorder | AudioToTextRecorderClient] = None
+        self.recorder: Optional[AudioToTextRecorder] = None
         self.is_silero_speech_active: bool = False  # Note: Seems unused
         self.silero_working: bool = False  # Note: Seems unused
-        self.on_wakeword_detection_start: Optional[Callable] = (
-            None  # Note: Seems unused
-        )
+        self.on_wakeword_detection_start: Optional[Callable] = None  # Note: Seems unused
         self.on_wakeword_detection_end: Optional[Callable] = None  # Note: Seems unused
         self.realtime_text: Optional[str] = None
         self.sentence_end_cache: List[Dict[str, Any]] = []
@@ -163,19 +141,13 @@ class TranscriptionProcessor:
         self.silence_active: bool = False
         self.last_audio_copy: Optional[np.ndarray] = None
 
-        self.on_tts_allowed_to_synthesize: Optional[Callable] = (
-            None  # Note: Seems unused
-        )
+        self.on_tts_allowed_to_synthesize: Optional[Callable] = None  # Note: Seems unused
 
         self.text_similarity = TextSimilarity(focus="end", n_words=5)
 
         # Use provided config or default
-        self.recorder_config = copy.deepcopy(
-            recorder_config if recorder_config else DEFAULT_RECORDER_CONFIG
-        )
-        self.recorder_config["language"] = (
-            self.source_language
-        )  # Ensure language is set
+        self.recorder_config = copy.deepcopy(recorder_config if recorder_config else DEFAULT_RECORDER_CONFIG)
+        self.recorder_config["language"] = self.source_language  # Ensure language is set
 
         if USE_TURN_DETECTION:
             logger.debug("Turn detection enabled")
@@ -205,12 +177,8 @@ class TranscriptionProcessor:
         """
         if not self.recorder:
             return default
-        if START_STT_SERVER:
-            # Assuming get_parameter exists and handles potential errors
-            return self.recorder.get_parameter(param_name)  # type: ignore
-        else:
-            # Access attribute directly for the local version
-            return getattr(self.recorder, param_name, default)
+
+        return getattr(self.recorder, param_name, default)
 
     def _set_recorder_param(self, param_name: str, value: Any) -> None:
         """
@@ -223,12 +191,7 @@ class TranscriptionProcessor:
         """
         if not self.recorder:
             return
-        if START_STT_SERVER:
-            # Assuming set_parameter exists and handles potential errors
-            self.recorder.set_parameter(param_name, value)  # type: ignore
-        else:
-            # Set attribute directly for the local version
-            setattr(self.recorder, param_name, value)
+        setattr(self.recorder, param_name, value)
 
     def _is_recorder_recording(self) -> bool:
         """
@@ -240,11 +203,8 @@ class TranscriptionProcessor:
         """
         if not self.recorder:
             return False
-        if START_STT_SERVER:
-            return self.recorder.get_parameter("is_recording")  # type: ignore
-        else:
-            # Ensure the attribute exists before accessing
-            return getattr(self.recorder, "is_recording", False)
+
+        return getattr(self.recorder, "is_recording", False)
 
     # --- Silence Monitor ---
     def _start_silence_monitor(self) -> None:
@@ -257,47 +217,28 @@ class TranscriptionProcessor:
         def monitor():
             hot = False
             # Initialize silence_time using the abstracted getter
-            self.silence_time = self._get_recorder_param(
-                "speech_end_silence_start", 0.0
-            )
+            self.silence_time = self._get_recorder_param("speech_end_silence_start", 0.0)
 
             while not self.shutdown_performed:
-                speech_end_silence_start = (
-                    self.silence_time
-                )  # Use cached value updated by callback
+                speech_end_silence_start = self.silence_time  # Use cached value updated by callback
 
-                if (
-                    self.recorder
-                    and speech_end_silence_start is not None
-                    and speech_end_silence_start != 0
-                ):
-                    silence_waiting_time = self._get_recorder_param(
-                        "post_speech_silence_duration", 0.0
-                    )
+                if self.recorder and speech_end_silence_start is not None and speech_end_silence_start != 0:
+                    silence_waiting_time = self._get_recorder_param("post_speech_silence_duration", 0.0)
                     time_since_silence = time.time() - speech_end_silence_start
 
                     # Calculate latest time pipeline can start without exceeding silence duration
                     latest_pipe_start_time = (
-                        silence_waiting_time
-                        - self.pipeline_latency
-                        - self._PIPELINE_RESERVE_TIME_MS
+                        silence_waiting_time - self.pipeline_latency - self._PIPELINE_RESERVE_TIME_MS
                     )
 
                     # Calculate the target time to trigger potential sentence end detection
                     potential_sentence_end_time = latest_pipe_start_time
                     # Ensure it doesn't trigger too early
-                    if (
-                        potential_sentence_end_time
-                        < self._MIN_POTENTIAL_END_DETECTION_TIME_MS
-                    ):
-                        potential_sentence_end_time = (
-                            self._MIN_POTENTIAL_END_DETECTION_TIME_MS
-                        )
+                    if potential_sentence_end_time < self._MIN_POTENTIAL_END_DETECTION_TIME_MS:
+                        potential_sentence_end_time = self._MIN_POTENTIAL_END_DETECTION_TIME_MS
 
                     # Determine the threshold time to enter the "hot" state
-                    start_hot_condition_time = (
-                        silence_waiting_time - self._HOT_THRESHOLD_OFFSET_S
-                    )
+                    start_hot_condition_time = silence_waiting_time - self._HOT_THRESHOLD_OFFSET_S
                     # Ensure the hot condition has a minimum meaningful duration
                     if start_hot_condition_time < self._MIN_HOT_CONDITION_DURATION_S:
                         start_hot_condition_time = self._MIN_HOT_CONDITION_DURATION_S
@@ -305,9 +246,7 @@ class TranscriptionProcessor:
                     # Adjust potential_sentence_end_time based on Orpheus mode
                     if self.is_orpheus:
                         # For Orpheus, ensure potential end detection doesn't happen too early relative to hot state
-                        orpheus_potential_end_time = (
-                            silence_waiting_time - self._HOT_THRESHOLD_OFFSET_S
-                        )
+                        orpheus_potential_end_time = silence_waiting_time - self._HOT_THRESHOLD_OFFSET_S
                         if potential_sentence_end_time < orpheus_potential_end_time:
                             potential_sentence_end_time = orpheus_potential_end_time
 
@@ -317,22 +256,16 @@ class TranscriptionProcessor:
                     if time_since_silence > potential_sentence_end_time:
                         # Check if realtime_text exists before logging/detecting
                         current_text = self.realtime_text if self.realtime_text else ""
-                        logger.debug(
-                            f"Potential sentence end detected (timed out): {current_text}"
-                        )
+                        logger.debug(f"Potential sentence end detected (timed out): {current_text}")
                         # Use force_yield=True because this is triggered by timeout, not punctuation detection
                         self.detect_potential_sentence_end(
                             current_text, force_yield=True, force_ellipses=True
                         )  # Force ellipses if timeout occurs
 
                     # 2. Allow TTS synthesis shortly before the final silence duration elapses
-                    tts_allowance_time = (
-                        silence_waiting_time - self._TTS_ALLOWANCE_OFFSET_S
-                    )
+                    tts_allowance_time = silence_waiting_time - self._TTS_ALLOWANCE_OFFSET_S
                     if time_since_silence > tts_allowance_time:
-                        if (
-                            self.on_tts_allowed_to_synthesize
-                        ):  # Check if callback exists
+                        if self.on_tts_allowed_to_synthesize:  # Check if callback exists
                             self.on_tts_allowed_to_synthesize()
 
                     # 3. Handle "Hot" state (potential full transcription)
@@ -341,26 +274,18 @@ class TranscriptionProcessor:
                         hot = True
                         logger.debug("HOT - transcription complète imminente")
                         if self.potential_full_transcription_callback:
-                            self.potential_full_transcription_callback(
-                                self.realtime_text
-                            )
+                            self.potential_full_transcription_callback(self.realtime_text)
                     elif not hot_condition_met and hot:
                         # Transitioning from Hot to Cold while still in silence period (e.g., silence_waiting_time changed)
-                        if (
-                            self._is_recorder_recording()
-                        ):  # Check if still recording before aborting
+                        if self._is_recorder_recording():  # Check if still recording before aborting
                             logger.debug("COLD (during silence)")
                             if self.potential_full_transcription_abort_callback:
                                 self.potential_full_transcription_abort_callback()
                         hot = False
 
-                elif (
-                    hot
-                ):  # Exited silence period (speech_end_silence_start is 0 or None)
+                elif hot:  # Exited silence period (speech_end_silence_start is 0 or None)
                     # If we were hot, but silence ended (e.g., new speech started), transition to cold
-                    if (
-                        self._is_recorder_recording()
-                    ):  # Check if recording actually restarted
+                    if self._is_recorder_recording():  # Check if recording actually restarted
                         logger.debug("COLD (silence ended)")
                         if self.potential_full_transcription_abort_callback:
                             self.potential_full_transcription_abort_callback()
@@ -388,20 +313,19 @@ class TranscriptionProcessor:
             current_duration = self._get_recorder_param("post_speech_silence_duration")
             if current_duration != waiting_time:
                 log_text = text if text else "(No text provided)"
-                logger.debug(
-                    f"New waiting time: {waiting_time:.2f} for text: {log_text}"
-                )
+                logger.debug(f"New waiting time: {waiting_time:.2f} for text: {log_text}")
                 self._set_recorder_param("post_speech_silence_duration", waiting_time)
         else:
             logger.warning("️ Recorder not initialized, cannot set new waiting time.")
 
     def transcribe_loop(self) -> None:
         """
-        Sets up the final transcription callback mechanism with the recorder.
+        Sets up the final transcription callback mechanism with the recorder
+        and starts a continuous listening loop.
 
         This method defines the `on_final` callback that will be invoked by the
         recorder when a complete utterance transcription is available. It then
-        registers this callback with the recorder instance.
+        enters a loop to continuously listen for new transcriptions.
         """
 
         def on_final(text: Optional[str]):
@@ -423,22 +347,18 @@ class TranscriptionProcessor:
             # The specific method might differ between client/local STT versions
             # Assuming a common 'text' method exists or is adapted
             if hasattr(self.recorder, "text"):
-                self.recorder.text(on_final)  # type: ignore # Assume method exists
-            elif START_STT_SERVER:
-                logger.warning(
-                    "️ Recorder client does not have a 'text' method. Attempting to set 'on_final_transcription' parameter."
-                )
-                # Attempt to set via parameter for client, might not be the correct API
-                try:
-                    self._set_recorder_param("on_final_transcription", on_final)
-                except Exception as e:
-                    logger.error(
-                        f"Failed to set final transcription callback parameter for client: {e}"
-                    )
+                # Loop continuously to listen for multiple transcriptions
+                while not self.shutdown_performed:
+                    try:
+                        self.recorder.text(on_final)  # type: ignore # Assume method exists
+                    except Exception as e:
+                        logger.error(f"Error in transcription loop: {e}", exc_info=True)
+                        if self.shutdown_performed:
+                            break
+                        # Small delay before retrying to avoid tight loop on persistent errors
+                        time.sleep(0.1)
             else:
-                logger.warning(
-                    "️ Local recorder object does not have a 'text' method for final callback."
-                )
+                logger.warning("️ Local recorder object does not have a 'text' method for final callback.")
         else:
             logger.error("Cannot set final callback: Recorder not initialized.")
 
@@ -453,7 +373,7 @@ class TranscriptionProcessor:
         self.potential_sentences_yielded.clear()
         logger.debug("️ Potential sentence yield cache cleared (generation aborted).")
 
-    def perform_final(self, audio_bytes: Optional[bytes] = None) -> None:
+    def perform_final(self) -> None:
         """
         Manually triggers the final transcription process using the last known
         real-time text.
@@ -461,22 +381,16 @@ class TranscriptionProcessor:
         This bypasses the recorder's natural end-of-speech detection and immediately
         invokes the final transcription callback with the `self.realtime_text` content.
         Useful for scenarios where transcription needs to be finalized externally.
-
-        Args:
-            audio_bytes: Optional audio data (currently unused in this method's logic
-                         but kept for potential future use or API consistency).
         """
         if self.recorder:  # Check if recorder exists, primarily as a gatekeeper
             if self.realtime_text is None:
-                logger.warning(
-                    "Forcing final transcription, but realtime_text is None. Using empty string."
-                )
+                logger.warning("Forcing final transcription, but realtime_text is None. Using empty string.")
                 current_text = ""
             else:
                 current_text = self.realtime_text
 
             self.final_transcription = current_text  # Update internal state
-            print(f"-> User: {current_text}")
+            logger.info(f"-> User: {current_text}")
             self.sentence_end_cache.clear()
             self.potential_sentences_yielded.clear()
 
@@ -566,9 +480,7 @@ class TranscriptionProcessor:
         now = time.time()
 
         # Only proceed if text ends with a standard punctuation mark or if forced
-        ends_with_punctuation = any(
-            stripped_text_raw.endswith(p) for p in end_punctuations
-        )
+        ends_with_punctuation = any(stripped_text_raw.endswith(p) for p in end_punctuations)
         if not ends_with_punctuation and not force_yield:
             return
 
@@ -588,9 +500,7 @@ class TranscriptionProcessor:
             entry_found["timestamps"].append(now)
             # Keep only recent timestamps
             entry_found["timestamps"] = [
-                t
-                for t in entry_found["timestamps"]
-                if now - t <= self._SENTENCE_CACHE_MAX_AGE_MS
+                t for t in entry_found["timestamps"] if now - t <= self._SENTENCE_CACHE_MAX_AGE_MS
             ]
         else:
             # Add new entry
@@ -606,10 +516,7 @@ class TranscriptionProcessor:
         if force_yield:
             should_yield = True
         # Yield if the same sentence ending appeared multiple times recently
-        elif (
-            ends_with_punctuation
-            and len(entry_found["timestamps"]) >= self._SENTENCE_CACHE_TRIGGER_COUNT
-        ):
+        elif ends_with_punctuation and len(entry_found["timestamps"]) >= self._SENTENCE_CACHE_TRIGGER_COUNT:
             should_yield = True
 
         if should_yield:
@@ -623,9 +530,7 @@ class TranscriptionProcessor:
 
             if not already_yielded:
                 # Add to yielded list (use normalized text for comparison, keep timestamp)
-                self.potential_sentences_yielded.append(
-                    {"text": normalized_text, "timestamp": now}
-                )
+                self.potential_sentences_yielded.append({"text": normalized_text, "timestamp": now})
                 # Optional: Limit yielded list size
                 # MAX_YIELDED_SIZE = 20
                 # if len(self.potential_sentences_yielded) > MAX_YIELDED_SIZE:
@@ -633,9 +538,7 @@ class TranscriptionProcessor:
 
                 logger.debug(f"️ Yielding potential sentence end: {stripped_text_raw}")
                 if self.potential_sentence_end:
-                    self.potential_sentence_end(
-                        stripped_text_raw
-                    )  # Callback with original punctuation
+                    self.potential_sentence_end(stripped_text_raw)  # Callback with original punctuation
             # else: # No need to log this every time, can be noisy
             # logger.debug(f"️ Sentence '{normalized_text}' matched yielded '{yielded_entry.get('text', '')}', not yielding again.")
 
@@ -648,9 +551,7 @@ class TranscriptionProcessor:
         """
         if self.silence_active != silence_active:
             self.silence_active = silence_active
-            logger.debug(
-                f"Silence state changed: {'ACTIVE' if silence_active else 'INACTIVE'}"
-            )
+            logger.debug(f"Silence state changed: {'ACTIVE' if silence_active else 'INACTIVE'}")
             if self.silence_active_callback:
                 self.silence_active_callback(silence_active)
 
@@ -676,9 +577,7 @@ class TranscriptionProcessor:
             return audio_copy
         else:
             # If getting current audio failed, return the last known good copy
-            logger.debug(
-                "Returning last known audio copy as current fetch failed or yielded empty."
-            )
+            logger.debug("Returning last known audio copy as current fetch failed or yielded empty.")
             return self.last_audio_copy
 
     def get_audio_copy(self) -> Optional[np.ndarray]:
@@ -699,22 +598,16 @@ class TranscriptionProcessor:
             logger.warning("️ Cannot get audio copy: Recorder not initialized.")
             return self.last_audio_copy  # Return last known good copy if available
         if not hasattr(self.recorder, "frames"):
-            logger.warning(
-                "️ Cannot get audio copy: Recorder has no 'frames' attribute."
-            )
+            logger.warning("️ Cannot get audio copy: Recorder has no 'frames' attribute.")
             return self.last_audio_copy
 
         try:
             # Access frames safely
             # Ensure frames is thread-safe if accessed concurrently
             with (
-                self.recorder.frames_lock
-                if hasattr(self.recorder, "frames_lock")
-                else threading.Lock()
+                self.recorder.frames_lock if hasattr(self.recorder, "frames_lock") else threading.Lock()
             ):  # Use recorder's lock if available
-                frames_data = list(
-                    self.recorder.frames
-                )  # Create a copy of the deque items
+                frames_data = list(self.recorder.frames)  # Create a copy of the deque items
 
             if not frames_data:
                 logger.debug("Recorder frames buffer is currently empty.")
@@ -723,12 +616,8 @@ class TranscriptionProcessor:
             # Process audio buffer
             full_audio_array = np.frombuffer(b"".join(frames_data), dtype=np.int16)
             if full_audio_array.size == 0:
-                logger.debug(
-                    "Recorder frames buffer resulted in empty array after join."
-                )
-                return (
-                    self.last_audio_copy
-                )  # Return last known if buffer is empty after join
+                logger.debug("Recorder frames buffer resulted in empty array after join.")
+                return self.last_audio_copy  # Return last known if buffer is empty after join
 
             full_audio = full_audio_array.astype(np.float32) / INT16_MAX_ABS_VALUE
             # No need for deepcopy here as full_audio is a new array derived from the buffer
@@ -737,9 +626,7 @@ class TranscriptionProcessor:
             # Update last_audio_copy only if the new copy is valid and has data
             if audio_copy is not None and len(audio_copy) > 0:
                 self.last_audio_copy = audio_copy
-                logger.debug(
-                    f"Successfully got audio copy (length: {len(audio_copy)} samples)."
-                )
+                logger.debug(f"Successfully got audio copy (length: {len(audio_copy)} samples).")
 
             return audio_copy
         except Exception as e:
@@ -757,12 +644,8 @@ class TranscriptionProcessor:
             """Callback triggered when recorder detects start of silence (end of speech)."""
             self.set_silence(True)
             # Capture silence start time immediately. Use recorder's time if available.
-            recorder_silence_start = self._get_recorder_param(
-                "speech_end_silence_start", None
-            )
-            self.silence_time = (
-                recorder_silence_start if recorder_silence_start else time.time()
-            )
+            recorder_silence_start = self._get_recorder_param("speech_end_silence_start", None)
+            self.silence_time = recorder_silence_start if recorder_silence_start else time.time()
             logger.debug(
                 f" Silence detected (start_silence_detection called). Silence time set to: {self.silence_time}"
             )
@@ -771,9 +654,7 @@ class TranscriptionProcessor:
             """Callback triggered when recorder detects end of silence (start of speech)."""
             self.set_silence(False)
             self.silence_time = 0.0  # Reset silence time
-            logger.debug(
-                "️ Speech detected (stop_silence_detection called). Silence time reset."
-            )
+            logger.debug("️ Speech detected (stop_silence_detection called). Silence time reset.")
 
         def start_recording():
             """Callback triggered when recorder starts a new recording segment."""
@@ -790,9 +671,7 @@ class TranscriptionProcessor:
             """
             logger.debug("️ Recording stopped.")
             # Get audio *before* recorder might clear it for final processing
-            audio_copy = (
-                self.get_last_audio_copy()
-            )  # Use get_last_audio_copy for robustness
+            audio_copy = self.get_last_audio_copy()  # Use get_last_audio_copy for robustness
             if self.before_final_sentence:
                 logger.debug("️ Calling before_final_sentence callback...")
                 # Pass the audio and the *current* realtime text
@@ -842,14 +721,10 @@ class TranscriptionProcessor:
         active_config["on_turn_detection_start"] = (
             start_silence_detection  # Triggered when silence starts (speech ends)
         )
-        active_config["on_turn_detection_stop"] = (
-            stop_silence_detection  # Triggered when silence stops (speech starts)
-        )
+        active_config["on_turn_detection_stop"] = stop_silence_detection  # Triggered when silence stops (speech starts)
         # *** END CORRECTION ***
         active_config["on_recording_start"] = start_recording
-        active_config["on_recording_stop"] = (
-            stop_recording  # This callback happens before final text
-        )
+        active_config["on_recording_stop"] = stop_recording  # This callback happens before final text
 
         # Log the configuration being used
         def _pretty(v, max_len=60):
@@ -857,50 +732,32 @@ class TranscriptionProcessor:
                 return f"[callback: {v.__name__}]"
             if isinstance(v, str):
                 one_line = v.replace("\n", " ")
-                return (
-                    (one_line[:max_len].rstrip() + " [...]")
-                    if len(one_line) > max_len
-                    else one_line
-                )
+                return (one_line[:max_len].rstrip() + " [...]") if len(one_line) > max_len else one_line
             return v
 
-        pretty_cfg = {k: _pretty(v) for k, v in active_config.items()}
+        # pretty_cfg = {k: _pretty(v) for k, v in active_config.items()}
         # Ensure sensitive or overly long items are handled if necessary
         # Example: if 'api_key' in pretty_cfg: pretty_cfg['api_key'] = '********'
-        padded_cfg = textwrap.indent(json.dumps(pretty_cfg, indent=2), "    ")
+        # padded_cfg = textwrap.indent(json.dumps(pretty_cfg, indent=2), "    ")
 
-        recorder_type = (
-            "AudioToTextRecorderClient" if START_STT_SERVER else "AudioToTextRecorder"
-        )
-        logger.debug(f"️ Creating {recorder_type} with params:")
-        print(padded_cfg)  # Use print for formatted JSON as logger might mangle it
+        recorder_type = "AudioToTextRecorder"
+        # print(padded_cfg)  # Use print for formatted JSON as logger might mangle it
 
         # --- Instantiate Recorder ---
         try:
-            if START_STT_SERVER:
-                # Note: The client might use different callback names, adjust if needed
-                # For now, assume it might accept the same or handle internally
-                self.recorder = AudioToTextRecorderClient(**active_config)
-                # Ensure wake words are disabled if needed (can also be done via config dict)
-                self._set_recorder_param("use_wake_words", False)
-            else:
-                # Instantiate the LOCAL recorder with the corrected active_config
-                self.recorder = AudioToTextRecorder(**active_config)
-                # Ensure wake words are disabled if needed (double check via param setting)
-                self._set_recorder_param(
-                    "use_wake_words", False
-                )  # Uses the helper method
+            # Instantiate the LOCAL recorder with the corrected active_config
+            self.recorder = AudioToTextRecorder(**active_config)
+            # Ensure wake words are disabled if needed (double check via param setting)
+            self._set_recorder_param("use_wake_words", False)  # Uses the helper method
 
-            logger.debug(f"{recorder_type} instance created successfully.")
+            logger.debug(f"-- [DONE] {recorder_type} created")
 
         except Exception as e:
             # Log the exception with traceback for detailed debugging
             logger.exception(f"Failed to create recorder: {e}")
             self.recorder = None  # Ensure recorder is None if creation failed
 
-    def feed_audio(
-        self, chunk: bytes, audio_meta_data: Optional[Dict[str, Any]] = None
-    ) -> None:
+    def feed_audio(self, chunk: bytes, audio_meta_data: Optional[Dict[str, Any]] = None) -> None:
         """
         Feeds an audio chunk to the underlying recorder instance for processing.
 
@@ -911,17 +768,7 @@ class TranscriptionProcessor:
         """
         if self.recorder and not self.shutdown_performed:
             try:
-                # Check if feed_audio expects metadata and provide if available
-                if START_STT_SERVER:
-                    # Client might require metadata in a specific format
-                    self.recorder.feed_audio(
-                        chunk
-                    )  # Assuming client handles metadata internally or doesn't need it per chunk
-                else:
-                    # Local recorder might use metadata if provided
-                    self.recorder.feed_audio(
-                        chunk
-                    )  # Assuming local handles it similarly for now
+                self.recorder.feed_audio(chunk)  # Assuming local handles it similarly for now
 
                 logger.debug(f"Fed audio chunk of size {len(chunk)} bytes to recorder.")
             except Exception as e:
@@ -938,35 +785,18 @@ class TranscriptionProcessor:
         further processing. Sets the `shutdown_performed` flag.
         """
         if not self.shutdown_performed:
-            logger.debug("Shutting down TranscriptionProcessor...")
+            logger.debug("-- [SHUTDOWN] TranscriptionProcessor")
             self.shutdown_performed = True  # Set flag early to stop loops/threads
 
             if self.recorder:
-                logger.debug("Calling recorder shutdown()...")
                 try:
                     self.recorder.shutdown()
-                    logger.debug("Recorder shutdown() method completed.")
                 except Exception as e:
                     logger.error(f"Error during recorder shutdown: {e}", exc_info=True)
                 finally:
                     self.recorder = None
             else:
-                logger.debug("No active recorder instance to shut down.")
+                logger.debug("No active recorder instance to shut down")
 
-            # Clean up other resources if necessary (e.g., turn detection?)
-            if (
-                USE_TURN_DETECTION
-                and hasattr(self, "turn_detection")
-                and hasattr(self.turn_detection, "shutdown")
-            ):
-                logger.debug("Shutting down TurnDetection...")
-                try:
-                    self.turn_detection.shutdown()  # Example: Assuming TurnDetection has a shutdown method
-                except Exception as e:
-                    logger.error(
-                        f"Error during TurnDetection shutdown: {e}", exc_info=True
-                    )
-
-            logger.debug("TranscriptionProcessor shutdown process finished.")
         else:
-            logger.debug("ℹ️ Shutdown already performed.")
+            logger.debug("Shutdown already performed.")
