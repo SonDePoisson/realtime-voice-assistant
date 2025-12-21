@@ -1,12 +1,12 @@
 [project]
 name = "realtime-voice-assistant"
 version = "0.1.0"
-description = "Assistant vocal en temps réel en avec Whisper, Kokoro et Ollama"
+description = "Assistant vocal en temps réel avec Whisper, EdgeTTS et Ollama"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "realtimestt==0.3.104",
-    "realtimetts[kokoro]>=0.5.5",
+    "realtimetts[kokoro,edge]>=0.5.5",
     "requests>=2.32.5",
     "transformers>=4.30.0",
     "torch>=2.0.0",
@@ -16,5 +16,4 @@ dependencies = [
     "sentence-transformers>=2.2.0",
     "pip>=25.3",
     "dotenv>=0.9.9",
-    "edge-tts>=7.2.7",
 ]

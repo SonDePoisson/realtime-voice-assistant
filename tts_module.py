@@ -6,10 +6,9 @@ from collections import namedtuple
 from queue import Queue
 from typing import Callable, Generator, Optional
 
-import edge_tts
-
 # Assuming RealtimeTTS is installed and available
 from RealtimeTTS import (
+    EdgeEngine,
     KokoroEngine,
     TextToAudioStream,
 )
@@ -26,7 +25,7 @@ KOKORO_VOICES = {
     "en": "af_heart",  # Voix anglaise féminine
 }
 EDGE_TTS_VOICES = {
-    "fr": "fr-FR-DeniseNeural",  # Voix française féminine
+    "fr": "en-US-AvaMultilingualNeural",
     "en": "en-US-AvaMultilingualNeural",  # Voix anglaise multilingue
 }
 Silence = namedtuple("Silence", ("comma", "sentence", "default"))
@@ -83,7 +82,7 @@ class AudioProcessor:
 
             self.engine = KokoroEngine(
                 voice=voice,
-                default_speed=1.26,
+                default_speed=1.10,
                 trim_silence=True,
                 silence_threshold=0.01,
                 extra_start_ms=25,
@@ -92,26 +91,25 @@ class AudioProcessor:
                 fade_out_ms=10,
             )
         elif engine == "edge_tts":
-            # EdgeTTS ne nécessite pas d'initialisation d'engine
-            # La synthèse se fait directement via edge_tts.Communicate()
-            self.edge_voice = EDGE_TTS_VOICES.get(language, EDGE_TTS_VOICES["en"])
-            logger.debug(f"Using EdgeTTS voice '{self.edge_voice}' for language '{language}'")
-            self.engine = None  # EdgeTTS n'utilise pas RealtimeTTS
-            self.stream = None  # Pas de stream pour EdgeTTS
+            # Initialiser EdgeTTS engine avec la voix appropriée
+            voice_name = EDGE_TTS_VOICES.get(language, EDGE_TTS_VOICES["en"])
+            logger.debug(f"Using EdgeTTS voice '{voice_name}' for language '{language}'")
+
+            self.engine = EdgeEngine()
+            self.engine.set_voice(voice_name)
         else:
             raise ValueError(f"Unsupported engine: {engine}")
 
-        # Initialize the RealtimeTTS stream (only for Kokoro)
-        if engine == "kokoro":
-            self.stream = TextToAudioStream(
-                self.engine,
-                muted=False,  # CHANGÉ: False pour lecture directe sur haut-parleurs
-                playout_chunk_size=4096,  # Internal chunk size for processing
-                on_audio_stream_stop=self.on_audio_stream_stop,
-            )
+        # Initialize the RealtimeTTS stream
+        self.stream = TextToAudioStream(
+            self.engine,
+            muted=False,  # False pour lecture directe sur haut-parleurs
+            playout_chunk_size=4096,  # Internal chunk size for processing
+            on_audio_stream_stop=self.on_audio_stream_stop,
+        )
 
-        # Prewarm and measure TTFA (only for Kokoro)
-        if engine == "kokoro":
+        # Prewarm and measure TTFA
+        if engine in ["kokoro", "edge_tts"]:
             # Prewarm the engine
             self.stream.feed("prewarm")
             play_kwargs = dict(
@@ -169,9 +167,6 @@ class AudioProcessor:
             else:
                 logger.warning("️ TTFA measurement failed (no audio chunk received).")
                 self.tts_inference_time = 0
-        else:
-            # For EdgeTTS, skip prewarm and set a default TTFA
-            self.tts_inference_time = 200  # Estimated TTFA for EdgeTTS
 
         # Callbacks to be set externally if needed
         self.on_first_audio_chunk_synthesize: Optional[Callable[[], None]] = None
@@ -184,52 +179,6 @@ class AudioProcessor:
         """
         logger.debug("Audio stream stopped.")
         self.finished_event.set()
-
-    async def _synthesize_edge_tts(
-        self,
-        text: str,
-        audio_chunks: Queue,
-        stop_event: threading.Event,
-    ) -> bool:
-        """
-        Synthétise le texte avec EdgeTTS de manière asynchrone.
-
-        Args:
-            text: Le texte à synthétiser
-            audio_chunks: Queue pour les chunks audio
-            stop_event: Event pour arrêter la synthèse
-
-        Returns:
-            True si la synthèse est complète, False si interrompue
-        """
-        try:
-            communicate = edge_tts.Communicate(text, self.edge_voice)
-            first_chunk = True
-
-            async for chunk in communicate.stream():
-                if stop_event.is_set():
-                    logger.debug("EdgeTTS synthesis interrupted")
-                    return False
-
-                if chunk["type"] == "audio":
-                    audio_data = chunk["data"]
-                    try:
-                        audio_chunks.put_nowait(audio_data)
-
-                        # Appeler le callback au premier chunk
-                        if first_chunk and self.on_first_audio_chunk_synthesize:
-                            first_chunk = False
-                            try:
-                                self.on_first_audio_chunk_synthesize()
-                            except Exception as e:
-                                logger.error(f"Error in on_first_audio_chunk_synthesize callback: {e}")
-                    except Exception as e:
-                        logger.warning(f"EdgeTTS audio queue full, dropping chunk: {e}")
-
-            return True
-        except Exception as e:
-            logger.error(f"EdgeTTS synthesis error: {e}", exc_info=True)
-            return False
 
     def synthesize(
         self,
@@ -257,21 +206,6 @@ class AudioProcessor:
         Returns:
             True if synthesis completed fully, False if interrupted by stop_event.
         """
-        # Handle EdgeTTS separately (async)
-        if self.engine_name == "edge_tts":
-            logger.debug(f"▶️ {generation_string} Starting EdgeTTS synthesis. Text: {text[:50]}...")
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                result = loop.run_until_complete(
-                    self._synthesize_edge_tts(text, audio_chunks, stop_event)
-                )
-                if result:
-                    logger.debug(f"{generation_string} EdgeTTS synthesis complete.")
-                return result
-            finally:
-                loop.close()
-
         self.stream.feed(text)
         self.finished_event.clear()  # Reset finished event before starting
 
@@ -371,7 +305,7 @@ class AudioProcessor:
             force_first_fragment_after_words=999999,  # Don't force early fragments
         )
 
-        logger.debug(f"▶️ {generation_string} Quick Starting synthesis. Text: {text[:50]}...")
+        logger.debug(f" {generation_string} Quick Starting synthesis. Text: {text[:50]}...")
         self.stream.play_async(**play_kwargs)
 
         # Wait loop for completion or interruption
@@ -407,38 +341,28 @@ class AudioProcessor:
         generation_string: str = "",
     ) -> bool:
         """
-         Synthesizes audio from a generator yielding text chunks.
+        Synthesizes audio from a generator yielding text chunks.
 
-         Feeds text chunks yielded by the generator to the TTS engine. If audio_chunks
-         is provided, audio is put into the queue (muted playback). If audio_chunks is None,
-         audio is played directly to speakers. Synthesis can be interrupted via the stop_event.
-         Triggers the `on_first_audio_chunk_synthesize` callback when the first valid audio chunk is queued.
+        Feeds text chunks yielded by the generator to the TTS engine. If audio_chunks
+        is provided, audio is put into the queue (muted playback). If audio_chunks is None,
+        audio is played directly to speakers. Synthesis can be interrupted via the stop_event.
+        Triggers the `on_first_audio_chunk_synthesize` callback when the first valid audio chunk is queued.
 
 
-         Args:
-             generator: A generator yielding text chunks (strings) to synthesize.
-             audio_chunks: Optional queue to put the resulting audio chunks (bytes) into.
-                           If None, audio is played directly to speakers.
-             stop_event: A threading.Event to signal interruption of the synthesis.
-                         If None, uses self.stop_event.
-             generation_string: An optional identifier string for logging purposes.
+        Args:
+            generator: A generator yielding text chunks (strings) to synthesize.
+            audio_chunks: Optional queue to put the resulting audio chunks (bytes) into.
+                          If None, audio is played directly to speakers.
+            stop_event: A threading.Event to signal interruption of the synthesis.
+                        If None, uses self.stop_event.
+            generation_string: An optional identifier string for logging purposes.
 
-         Returns:
-             True if synthesis completed fully, False if interrupted by stop_event.
+        Returns:
+            True if synthesis completed fully, False if interrupted by stop_event.
         """
         # Use default stop_event if not provided
         if stop_event is None:
             stop_event = self.stop_event
-
-        # Handle EdgeTTS (accumulate generator into full text)
-        if self.engine_name == "edge_tts":
-            # EdgeTTS doesn't support streaming from generator, so accumulate text first
-            full_text = "".join(generator)
-            if audio_chunks is None:
-                # If no queue provided, we need one for EdgeTTS
-                logger.warning("EdgeTTS requires audio_chunks queue, cannot play directly")
-                return False
-            return self.synthesize(full_text, audio_chunks, stop_event, generation_string)
 
         # Determine if we're using queue mode or direct playback
         use_queue = audio_chunks is not None

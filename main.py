@@ -25,7 +25,7 @@ from logsetup import setup_logging
 
 LLM_PROVIDER = "ollama"
 LLM_MODEL = "ministral-3"  # ministral-3:latest # llama3.2:3b
-TTS_MODEL = "edge_tts"
+TTS_MODEL = "kokoro"  # kokoro # edge-tts
 STT_MODEL = "small"  # Configure in stt_module
 LANGUAGE = "fr"
 

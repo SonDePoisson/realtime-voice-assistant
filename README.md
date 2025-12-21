@@ -18,7 +18,7 @@ Assistant vocal conversationnel en temps réel utilisant les technologies de poi
 | --------- | ----------- | ----------- |
 | **STT** | Whisper small | Reconnaissance vocale rapide et précise |
 | **LLM** | Ollama ministral-3 | Génération de réponses intelligentes |
-| **TTS** | EdgeTTS | Synthèse vocale multilingue via Azure |
+| **TTS** | EdgeTTS (via RealtimeTTS) | Synthèse vocale multilingue via Azure |
 
 ## 📋 Prérequis
 
