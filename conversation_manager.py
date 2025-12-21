@@ -46,6 +46,7 @@ class ConversationManager:
         llm_model: str = "llama3.2:3b",
         # llm_model: str = "ministral-3:latest",
         tts_engine: str = "kokoro",
+        language: str = "fr",
         system_prompt_file: str = "system_prompt.txt",
     ):
         """
@@ -72,10 +73,10 @@ class ConversationManager:
         )
 
         logger.debug("-- [Init] TTS")
-        self.tts = AudioProcessor(engine=tts_engine)
+        self.tts = AudioProcessor(engine=tts_engine, language=language)
 
         logger.debug("-- [Init] STT")
-        self.stt = TranscriptionProcessor(source_language="fr")
+        self.stt = TranscriptionProcessor(source_language=language)
 
         # Connecter les callbacks STT
         self.stt.full_transcription_callback = self._on_user_input
@@ -113,7 +114,7 @@ class ConversationManager:
                 return prompt
         except FileNotFoundError:
             logger.warning(f"Fichier {filepath} introuvable, utilisation du prompt par défaut")
-            return "Tu es un assistant vocal français serviable et amical."
+            return "Tu es un assistant vocal serviable et amical."
 
     def _start_workers(self):
         """Démarre les threads workers"""

@@ -25,7 +25,7 @@ DEFAULT_RECORDER_CONFIG: Dict[str, Any] = {
     "model": "small",  # CHANGÉ: small au lieu de base.en pour plus de rapidité
     "realtime_model_type": "small",  # CHANGÉ: small au lieu de base.en
     "use_main_model_for_realtime": False,
-    "language": "fr",  # CHANGÉ: français au lieu d'anglais
+    "language": "en",  # Pass Through Main
     "silero_sensitivity": 0.05,
     "webrtc_sensitivity": 3,
     "post_speech_silence_duration": 0.7,
@@ -82,7 +82,7 @@ class TranscriptionProcessor:
 
     def __init__(
         self,
-        source_language: str = "fr",
+        source_language: str = "en",
         realtime_transcription_callback: Optional[Callable[[str], None]] = None,
         full_transcription_callback: Optional[Callable[[str], None]] = None,
         potential_full_transcription_callback: Optional[Callable[[str], None]] = None,
@@ -127,8 +127,6 @@ class TranscriptionProcessor:
         self.is_orpheus = is_orpheus
         self.pipeline_latency = pipeline_latency
         self.recorder: Optional[AudioToTextRecorder] = None
-        self.is_silero_speech_active: bool = False  # Note: Seems unused
-        self.silero_working: bool = False  # Note: Seems unused
         self.on_wakeword_detection_start: Optional[Callable] = None  # Note: Seems unused
         self.on_wakeword_detection_end: Optional[Callable] = None  # Note: Seems unused
         self.realtime_text: Optional[str] = None
@@ -147,7 +145,6 @@ class TranscriptionProcessor:
 
         # Use provided config or default
         self.recorder_config = copy.deepcopy(recorder_config if recorder_config else DEFAULT_RECORDER_CONFIG)
-        self.recorder_config["language"] = self.source_language  # Ensure language is set
 
         if USE_TURN_DETECTION:
             logger.debug("Turn detection enabled")

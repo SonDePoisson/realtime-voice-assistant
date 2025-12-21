@@ -1,7 +1,7 @@
 [project]
 name = "realtime-voice-assistant"
 version = "0.1.0"
-description = "Assistant vocal en temps réel en français avec Whisper, Kokoro et Ollama"
+description = "Assistant vocal en temps réel en avec Whisper, Kokoro et Ollama"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

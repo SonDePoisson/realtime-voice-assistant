@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Assistant Vocal en Temps Réel (Français)
+Assistant Vocal en Temps Réel
 
 Application de conversation vocale en temps réel utilisant:
 - STT: Whisper small (transcription parole → texte)
@@ -22,6 +22,12 @@ import warnings
 
 from conversation_manager import ConversationManager
 from logsetup import setup_logging
+
+LLM_PROVIDER = "ollama"
+LLM_MODEL = "llama3.2:3b"
+TTS_MODEL = "kokoro"
+STT_MODEL = "small"  # Configure in stt_module
+LANGUAGE = "en"
 
 # Désactiver les warnings pour un affichage plus propre
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Éviter les deadlocks avec HuggingFace tokenizers
@@ -93,9 +99,10 @@ def main():
     try:
         # Créer le gestionnaire de conversation
         manager = ConversationManager(
-            llm_provider="ollama",
-            llm_model="llama3.2:3b",
-            tts_engine="kokoro",
+            llm_provider=LLM_PROVIDER,
+            llm_model=LLM_MODEL,
+            tts_engine=TTS_MODEL,
+            language=LANGUAGE,
             system_prompt_file="system_prompt.txt",
         )
 
