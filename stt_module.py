@@ -355,7 +355,7 @@ class TranscriptionProcessor:
                 return
 
             self.final_transcription = text
-            logger.debug(f"Final user text: {text}")
+            print(f"-> User: {text}")
             self.sentence_end_cache.clear()
             self.potential_sentences_yielded.clear()
 
@@ -415,7 +415,7 @@ class TranscriptionProcessor:
                 current_text = self.realtime_text
 
             self.final_transcription = current_text  # Update internal state
-            logger.debug(f"Forced Final user text: {current_text}")
+            print(f"-> User: {current_text}")
             self.sentence_end_cache.clear()
             self.potential_sentences_yielded.clear()
 

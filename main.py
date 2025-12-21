@@ -94,10 +94,6 @@ def main():
         # Démarrer l'assistant
         manager.start()
 
-        print("\n" + "=" * 70)
-        print("Assistant prêt! Commencez à parler...")
-        print("=" * 70)
-
         # Boucle principale - garde l'application en vie
         try:
             while True:

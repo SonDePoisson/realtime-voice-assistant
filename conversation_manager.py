@@ -33,9 +33,12 @@ class Generation:
         self.user_text = user_text
         self.assistant_text = ""
         self.text_queue = queue.Queue()  # Queue pour streaming LLM → TTS
+        self.audio_queue = queue.Queue()  # Queue pour streaming TTS → Player
         self.llm_completed = False
         self.tts_started = False
         self.tts_completed = False
+        self.audio_started = False
+        self.audio_completed = False
         self.timestamp = time.time()
 
 
@@ -108,6 +111,7 @@ class ConversationManager:
         # Worker threads
         self.llm_thread = None
         self.tts_thread = None
+        self.audio_player_thread = None
 
         logger.debug("ConversationManager initialisé")
 
@@ -132,7 +136,10 @@ class ConversationManager:
         self.tts_thread = threading.Thread(target=self._tts_worker, name="TTS-Worker", daemon=True)
         self.tts_thread.start()
 
-        logger.debug("Workers démarrés")
+        self.audio_player_thread = threading.Thread(target=self._audio_player_worker, name="Audio-Player", daemon=True)
+        self.audio_player_thread.start()
+
+        logger.debug("Workers démarrés (LLM, TTS, Audio Player)")
 
     def _on_user_input(self, text: str):
         """
@@ -224,10 +231,10 @@ class ConversationManager:
 
     def _tts_worker(self):
         """
-        Thread worker: synthétise et joue l'audio à partir des chunks de texte.
+        Thread worker: synthétise l'audio à partir des chunks de texte.
 
-        Attend que des chunks de texte soient disponibles dans la queue,
-        puis les synthétise en audio et les joue sur les haut-parleurs.
+        Attend que des chunks de texte soient disponibles dans text_queue,
+        puis les synthétise en audio et les place dans audio_queue.
         """
         logger.debug("TTS Worker démarré")
 
@@ -245,7 +252,7 @@ class ConversationManager:
             gen.tts_started = True
             logger.debug("Synthèse TTS démarrée...")
 
-            # Générateur qui consomme la queue
+            # Générateur qui consomme la queue de texte
             def text_chunks():
                 while True:
                     try:
@@ -262,22 +269,89 @@ class ConversationManager:
                         continue
 
             try:
-                # Synthétiser et jouer l'audio directement
-                # La méthode synthesize_generator() va jouer sur les haut-parleurs
+                # Synthétiser dans la queue audio (pas de lecture directe)
                 completed = self.tts.synthesize_generator(
                     text_chunks(),
-                    audio_chunks=None,  # Pas de queue, lecture directe sur haut-parleurs
+                    audio_chunks=gen.audio_queue,  # Mettre l'audio dans la queue
                     stop_event=self.abort_event,
                 )
 
                 if completed and not self.abort_event.is_set():
                     gen.tts_completed = True
+                    gen.audio_queue.put(None)  # Signal de fin pour l'audio player
                     logger.debug("Synthèse TTS terminée")
                 else:
+                    gen.audio_queue.put(None)  # Signal de fin même si interrompu
                     logger.debug("Synthèse TTS interrompue")
 
             except Exception as e:
                 logger.error(f"Erreur TTS: {e}", exc_info=True)
+                gen.audio_queue.put(None)  # Signal de fin en cas d'erreur
+
+    def _audio_player_worker(self):
+        """
+        Thread worker: joue l'audio depuis la queue audio.
+
+        Attend que des chunks audio soient disponibles dans audio_queue,
+        puis les joue sur les haut-parleurs via pyaudio.
+        """
+        import pyaudio
+
+        logger.debug("Audio Player Worker démarré")
+
+        # Initialiser PyAudio une seule fois
+        p = pyaudio.PyAudio()
+        stream = p.open(
+            format=pyaudio.paInt16,
+            channels=1,
+            rate=24000,
+            output=True,
+            frames_per_buffer=4096,
+        )
+
+        try:
+            while not self.shutdown_event.is_set():
+                time.sleep(0.01)
+
+                gen = self.current_generation
+                if not gen or gen.audio_started:
+                    continue
+
+                # Attendre qu'au moins quelques chunks audio soient disponibles (buffer)
+                if gen.audio_queue.qsize() < 5 and not gen.tts_completed:
+                    continue
+
+                gen.audio_started = True
+                logger.debug("Lecture audio démarrée...")
+
+                # Lire et jouer les chunks audio
+                try:
+                    while not self.abort_event.is_set():
+                        try:
+                            chunk = gen.audio_queue.get(timeout=0.1)
+                            if chunk is None:  # Signal de fin
+                                break
+                            stream.write(chunk)
+                        except queue.Empty:
+                            if gen.tts_completed:
+                                break
+                            continue
+
+                    if not self.abort_event.is_set():
+                        gen.audio_completed = True
+                        logger.debug("Lecture audio terminée")
+                    else:
+                        logger.debug("Lecture audio interrompue")
+
+                except Exception as e:
+                    logger.error(f"Erreur lors de la lecture audio: {e}", exc_info=True)
+
+        finally:
+            # Cleanup PyAudio
+            stream.stop_stream()
+            stream.close()
+            p.terminate()
+            logger.debug("Audio Player Worker arrêté")
 
     def _abort_current(self):
         """Interrompt la génération en cours"""
@@ -302,10 +376,16 @@ class ConversationManager:
         except Exception as e:
             logger.error(f"Erreur lors de l'arrêt TTS: {e}")
 
-        # Vider la queue de texte
+        # Vider les queues de texte et audio
         while not self.current_generation.text_queue.empty():
             try:
                 self.current_generation.text_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        while not self.current_generation.audio_queue.empty():
+            try:
+                self.current_generation.audio_queue.get_nowait()
             except queue.Empty:
                 break
 
@@ -355,5 +435,7 @@ class ConversationManager:
             self.llm_thread.join(timeout=2.0)
         if self.tts_thread:
             self.tts_thread.join(timeout=2.0)
+        if self.audio_player_thread:
+            self.audio_player_thread.join(timeout=2.0)
 
         logger.debug("Assistant arrêté")
