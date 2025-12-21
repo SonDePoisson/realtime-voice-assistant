@@ -31,7 +31,7 @@ manager = None
 
 def signal_handler(sig, frame):
     """Gestionnaire de signal pour arrêt propre (Ctrl+C)"""
-    print("\n\n🛑 Arrêt en cours...")
+    print("\n\nArrêt en cours...")
 
     if manager:
         try:
@@ -39,51 +39,28 @@ def signal_handler(sig, frame):
         except Exception as e:
             logger.error(f"Erreur lors de l'arrêt: {e}")
 
-    print("👋 Au revoir!")
     sys.exit(0)
-
-
-def print_banner():
-    """Affiche la bannière de démarrage"""
-    banner = """
-╔══════════════════════════════════════════════════════════════════╗
-║                                                                  ║
-║     🎙️  ASSISTANT VOCAL TEMPS RÉEL (Français)                     ║
-║                                                                  ║
-║  ────────────────────────────────────────────────────────────    ║
-║                                                                  ║
-║  🎧  STT: Whisper tiny (français)                                ║
-║  🧠  LLM: Ollama llama3.2:3b                                     ║
-║  🔊  TTS: Kokoro (voix française)                                ║
-║                                                                  ║
-╚══════════════════════════════════════════════════════════════════╝
-"""
-    print(banner)
 
 
 def check_dependencies():
     """Vérifie que les dépendances système sont disponibles"""
     import subprocess
 
-    logger.info("🔍 Vérification des dépendances...")
+    logger.info("Vérification des dépendances...")
 
     # Vérifier Ollama
     try:
-        result = subprocess.run(
-            ["ollama", "list"], capture_output=True, text=True, timeout=5
-        )
+        result = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=5)
         if "llama3.2:3b" in result.stdout:
-            logger.info("✅ Ollama llama3.2:3b trouvé")
+            logger.info("Ollama llama3.2:3b trouvé")
         else:
-            logger.warning(
-                "⚠️ Ollama llama3.2:3b non trouvé. Téléchargez-le avec: ollama pull llama3.2:3b"
-            )
+            logger.warning("Ollama llama3.2:3b non trouvé. Téléchargez-le avec: ollama pull llama3.2:3b")
             return False
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        logger.error("❌ Ollama non trouvé. Installez-le depuis https://ollama.ai")
+        logger.error("Ollama non trouvé. Installez-le depuis https://ollama.ai")
         return False
 
-    logger.info("✅ Dépendances OK")
+    logger.info("Dépendances OK")
     return True
 
 
@@ -91,12 +68,9 @@ def main():
     """Point d'entrée principal"""
     global manager
 
-    # Afficher la bannière
-    print_banner()
-
     # Vérifier les dépendances
     if not check_dependencies():
-        print("\n❌ Dépendances manquantes. Veuillez les installer.")
+        print("\nDépendances manquantes. Veuillez les installer.")
         print("\nPour Ollama:")
         print("  1. Installez depuis https://ollama.ai")
         print("  2. Téléchargez le modèle: ollama pull llama3.2:3b")
@@ -105,7 +79,7 @@ def main():
     # Configurer le gestionnaire de signal
     signal.signal(signal.SIGINT, signal_handler)
 
-    print("\n⏳ Initialisation de l'assistant...")
+    print("\nInitialisation de l'assistant...")
     print("   (Cela peut prendre quelques secondes...)\n")
 
     try:
@@ -121,13 +95,8 @@ def main():
         manager.start()
 
         print("\n" + "=" * 70)
-        print("✅ Assistant prêt! Commencez à parler...")
+        print("Assistant prêt! Commencez à parler...")
         print("=" * 70)
-        print("\n💡 Conseils d'utilisation:")
-        print("   • Parlez clairement dans votre microphone")
-        print("   • Attendez la fin de la réponse ou interrompez en parlant")
-        print("   • Appuyez sur Ctrl+C pour quitter")
-        print("\n" + "─" * 70 + "\n")
 
         # Boucle principale - garde l'application en vie
         try:
@@ -137,8 +106,8 @@ def main():
             signal_handler(None, None)
 
     except Exception as e:
-        logger.error(f"❌ Erreur fatale: {e}", exc_info=True)
-        print(f"\n❌ Erreur: {e}")
+        logger.error(f"Erreur fatale: {e}", exc_info=True)
+        print(f"\nErreur: {e}")
         print("\nVérifiez les logs pour plus de détails.")
         sys.exit(1)
 

@@ -1,8 +1,5 @@
 import logging
 import time
-from colors import (
-    Colors,
-)  # Assuming 'colors' library is installed (pip install ansicolors) or your custom Colors class
 from typing import (
     Optional,
 )  # Added for type hint consistency if needed elsewhere, though not strictly used in current args/returns
@@ -18,9 +15,7 @@ class CustomTimeFormatter(logging.Formatter):
     using the local time zone derived from the log record's creation time.
     """
 
-    def formatTime(
-        self, record: logging.LogRecord, datefmt: Optional[str] = None
-    ) -> str:
+    def formatTime(self, record: logging.LogRecord, datefmt: Optional[str] = None) -> str:
         """
         Formats the log record's creation time into MM:SS.cs format.
 
@@ -66,14 +61,7 @@ def setup_logging(level: int = logging.INFO) -> None:
         # --- Define Format String ---
         # Note: We will use the standard '%(asctime)s' placeholder now,
         # because our CustomTimeFormatter will format it correctly.
-        prefix = Colors.apply("🖥️").gray
-        # Use the standard %(asctime)s - our custom formatter will handle its appearance
-        timestamp = Colors.apply("%(asctime)s").blue
-        levelname = Colors.apply("%(levelname)-4.4s").green.bold
-        message = Colors.apply("%(message)s")
-        logger_name = Colors.apply("%(name)-10.10s").gray
-
-        log_format = f"{timestamp} {logger_name} {levelname} {message}"
+        log_format = "%(asctime)s %(name)-10.10s %(levelname)-4.4s %(message)s"
         # --- Format String Defined ---
 
         # --- Configure logging using explicit Handler/Formatter ---

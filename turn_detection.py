@@ -172,7 +172,7 @@ def interpolate_detection(prob: float) -> float:
 
     # Fallback: Should not be reached if anchor_points cover [0,1] properly.
     logger.warning(
-        f"🎤⚠️ Probability {p} fell outside defined anchor points {anchor_points}. Returning fallback value."
+        f"️ Probability {p} fell outside defined anchor points {anchor_points}. Returning fallback value."
     )
     return 4.0
 
@@ -229,7 +229,7 @@ class TurnDetection:
         self.text_worker.start()
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        logger.info(f"🎤🔌 Using device: {self.device}")
+        logger.info(f"Using device: {self.device}")
         self.tokenizer = transformers.DistilBertTokenizerFast.from_pretrained(model_dir)
         self.classification_model = (
             transformers.DistilBertForSequenceClassification.from_pretrained(model_dir)
@@ -249,7 +249,7 @@ class TurnDetection:
         )
 
         # Warmup the classification model for faster initial predictions
-        logger.info("🎤🔥 Warming up the classification model...")
+        logger.info("Warming up the classification model...")
         with torch.no_grad():
             warmup_text = "This is a warmup sentence."
             inputs = self.tokenizer(
@@ -261,7 +261,7 @@ class TurnDetection:
             )
             inputs = {key: value.to(self.device) for key, value in inputs.items()}
             _ = self.classification_model(**inputs)  # Run one prediction
-        logger.info("🎤✅ Classification model warmed up.")
+        logger.info("Classification model warmed up.")
 
         # Default dynamic pause settings (initialized for speed_factor=0.0)
         self.detection_speed: float = 0.5
@@ -330,7 +330,7 @@ class TurnDetection:
             - fast["unknown_sentence_detection_pause"]
         )
         logger.info(
-            f"🎤⚙️ Updated turn detection settings with speed_factor={speed_factor:.2f}"
+            f"️ Updated turn detection settings with speed_factor={speed_factor:.2f}"
         )
 
     def suggest_time(
@@ -471,7 +471,7 @@ class TurnDetection:
                 continue
 
             # --- Processing starts when text is received ---
-            logger.info(f'🎤⚙️ Starting pause calculation for: "{text}"')
+            logger.info(f'️ Starting pause calculation for: "{text}"')
 
             processed_text = preprocess_text(text)  # Apply initial cleaning
 
@@ -539,14 +539,14 @@ class TurnDetection:
                 final_pause += 0.2
 
             logger.info(
-                f'🎤📊 Calculated pauses: Punct={whisper_suggested_pause:.2f}, Model={sentence_finished_model_pause:.2f}, Weighted={weighted_pause:.2f}, Final={final_pause:.2f} for "{processed_text}" (Prob={prob_complete:.2f})'
+                f' Calculated pauses: Punct={whisper_suggested_pause:.2f}, Model={sentence_finished_model_pause:.2f}, Weighted={weighted_pause:.2f}, Final={final_pause:.2f} for "{processed_text}" (Prob={prob_complete:.2f})'
             )
 
             # Ensure final pause is not less than the pipeline latency overhead
             min_pause = self.pipeline_latency + self.pipeline_latency_overhead
             if final_pause < min_pause:
                 logger.info(
-                    f"🎤⚠️ Final pause ({final_pause:.2f}s) is less than minimum ({min_pause:.2f}s). Using minimum."
+                    f"️ Final pause ({final_pause:.2f}s) is less than minimum ({min_pause:.2f}s). Using minimum."
                 )
                 final_pause = min_pause
 
@@ -568,7 +568,7 @@ class TurnDetection:
         Args:
             text: The text segment (e.g., from STT) to be processed.
         """
-        logger.info(f'🎤📥 Queuing text for pause calculation: "{text}"')
+        logger.info(f' Queuing text for pause calculation: "{text}"')
         self.text_queue.put(text)
 
     def reset(self) -> None:
@@ -579,7 +579,7 @@ class TurnDetection:
         current waiting time tracker. Useful for starting a new conversation or
         interaction context.
         """
-        logger.info("🎤🔄 Resetting TurnDetection state.")
+        logger.info("Resetting TurnDetection state.")
         # Clear the history deques
         self.text_time_deque.clear()
         self.texts_without_punctuation.clear()

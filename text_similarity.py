@@ -87,7 +87,7 @@ class TextSimilarity:
         if not isinstance(text, str):
             # Handle potential non-string inputs gracefully
             logger.warning(
-                f"📏⚠️ Input is not a string: {type(text)}. Converting to empty string."
+                f"Input is not a string: {type(text)}. Converting to empty string."
             )
             text = ""
         text = text.lower()
@@ -181,10 +181,8 @@ class TextSimilarity:
 
         else:
             # This should not happen due to __init__ validation, but as a safeguard:
-            # Adding icons for consistency, though this log indicates an internal error.
-            # 💥 suggests an unexpected failure.
             logger.error(
-                f"📏💥 Invalid focus mode encountered during calculation: {self.focus}"
+                f"Invalid focus mode encountered during calculation: {self.focus}"
             )
             raise RuntimeError("Invalid focus mode encountered during calculation.")
 

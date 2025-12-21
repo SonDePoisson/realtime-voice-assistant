@@ -2,7 +2,6 @@ import logging
 from typing import Optional, Set, Tuple, Dict, Union  # Added for type hinting
 
 logger = logging.getLogger(__name__)
-from colors import Colors  # Assuming this is needed externally
 
 
 class TextContext:
@@ -82,7 +81,7 @@ class TextContext:
                     context_str = txt[:i]
                     remaining_str = txt[i:]
                     logger.info(
-                        f"🧠 {Colors.MAGENTA}Context found after char no: {i}, context: {context_str}"
+                        f"Context found after char no: {i}, context: {context_str}"
                     )
                     return context_str, remaining_str
 
