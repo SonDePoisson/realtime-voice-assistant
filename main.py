@@ -46,13 +46,13 @@ def check_dependencies():
     """Vérifie que les dépendances système sont disponibles"""
     import subprocess
 
-    logger.info("Vérification des dépendances...")
+    logger.debug("Vérification des dépendances...")
 
     # Vérifier Ollama
     try:
         result = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=5)
         if "llama3.2:3b" in result.stdout:
-            logger.info("Ollama llama3.2:3b trouvé")
+            logger.debug("Ollama llama3.2:3b trouvé")
         else:
             logger.warning("Ollama llama3.2:3b non trouvé. Téléchargez-le avec: ollama pull llama3.2:3b")
             return False
@@ -60,7 +60,7 @@ def check_dependencies():
         logger.error("Ollama non trouvé. Installez-le depuis https://ollama.ai")
         return False
 
-    logger.info("Dépendances OK")
+    logger.debug("Dépendances OK")
     return True
 
 

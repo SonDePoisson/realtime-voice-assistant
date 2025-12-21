@@ -67,13 +67,13 @@ class ConversationManager:
             tts_engine: Moteur TTS ("kokoro", "orpheus")
             system_prompt_file: Chemin vers le fichier de prompt système
         """
-        logger.info("Initialisation du ConversationManager...")
+        logger.debug("Initialisation du ConversationManager...")
 
         # Charger le prompt système
         self.system_prompt = self._load_system_prompt(system_prompt_file)
 
         # Initialiser les composants
-        logger.info("Initialisation du LLM...")
+        logger.debug("Initialisation du LLM...")
         self.llm = LLM(
             provider=llm_provider,
             model=llm_model,
@@ -81,10 +81,10 @@ class ConversationManager:
             no_think=False,
         )
 
-        logger.info("Initialisation du TTS...")
+        logger.debug("Initialisation du TTS...")
         self.tts = AudioProcessor(engine=tts_engine)
 
-        logger.info("Initialisation du STT...")
+        logger.debug("Initialisation du STT...")
         self.stt = TranscriptionProcessor(source_language="fr")
 
         # Connecter les callbacks STT
@@ -93,7 +93,7 @@ class ConversationManager:
 
         # Turn detection (si activé)
         if USE_TURN_DETECTION:
-            logger.info("Turn detection activé")
+            logger.debug("Turn detection activé")
             # Le turn detection est déjà géré dans TranscriptionProcessor
 
         # État de la conversation
@@ -109,14 +109,14 @@ class ConversationManager:
         self.llm_thread = None
         self.tts_thread = None
 
-        logger.info("ConversationManager initialisé")
+        logger.debug("ConversationManager initialisé")
 
     def _load_system_prompt(self, filepath: str) -> str:
         """Charge le prompt système depuis un fichier"""
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 prompt = f.read().strip()
-                logger.info(f"Prompt système chargé depuis {filepath}")
+                logger.debug(f"Prompt système chargé depuis {filepath}")
                 return prompt
         except FileNotFoundError:
             logger.warning(f"Fichier {filepath} introuvable, utilisation du prompt par défaut")
@@ -124,7 +124,7 @@ class ConversationManager:
 
     def _start_workers(self):
         """Démarre les threads workers"""
-        logger.info("Démarrage des workers...")
+        logger.debug("Démarrage des workers...")
 
         self.llm_thread = threading.Thread(target=self._llm_worker, name="LLM-Worker", daemon=True)
         self.llm_thread.start()
@@ -132,7 +132,7 @@ class ConversationManager:
         self.tts_thread = threading.Thread(target=self._tts_worker, name="TTS-Worker", daemon=True)
         self.tts_thread.start()
 
-        logger.info("Workers démarrés")
+        logger.debug("Workers démarrés")
 
     def _on_user_input(self, text: str):
         """
@@ -145,7 +145,7 @@ class ConversationManager:
             return
 
         text = text.strip()
-        logger.info(f"Utilisateur: {text}")
+        logger.debug(f"Utilisateur: {text}")
 
         # Interrompre la génération en cours si elle existe
         self._abort_current()
@@ -161,7 +161,7 @@ class ConversationManager:
 
     def _on_user_interrupt(self):
         """Callback appelé quand l'utilisateur commence à parler (interruption)"""
-        logger.info("Interruption détectée")
+        logger.debug("Interruption détectée")
         self._abort_current()
 
     def _llm_worker(self):
@@ -171,7 +171,7 @@ class ConversationManager:
         Lit les nouvelles entrées utilisateur et génère les réponses LLM,
         en plaçant chaque chunk de texte dans la queue pour le TTS.
         """
-        logger.info("LLM Worker démarré")
+        logger.debug("LLM Worker démarré")
 
         while not self.shutdown_event.is_set():
             # Attendre un nouvel input avec timeout
@@ -186,7 +186,7 @@ class ConversationManager:
             if not gen:
                 continue
 
-            logger.info("Génération LLM en cours...")
+            logger.debug("Génération LLM en cours...")
 
             try:
                 # Générer la réponse en streaming
@@ -197,7 +197,7 @@ class ConversationManager:
                 ):
                     # Vérifier si on doit arrêter
                     if self.abort_event.is_set():
-                        logger.info("Génération LLM annulée")
+                        logger.debug("Génération LLM annulée")
                         break
 
                     # Ajouter le chunk à la queue pour TTS
@@ -212,7 +212,7 @@ class ConversationManager:
                     # Ajouter la réponse complète à l'historique
                     self.history.append({"role": "assistant", "content": gen.assistant_text})
 
-                    logger.info(f"Assistant: {gen.assistant_text}")
+                    logger.debug(f"Assistant: {gen.assistant_text}")
 
                     # Limiter la taille de l'historique
                     if len(self.history) > 20:
@@ -229,7 +229,7 @@ class ConversationManager:
         Attend que des chunks de texte soient disponibles dans la queue,
         puis les synthétise en audio et les joue sur les haut-parleurs.
         """
-        logger.info("TTS Worker démarré")
+        logger.debug("TTS Worker démarré")
 
         while not self.shutdown_event.is_set():
             time.sleep(0.01)  # Petite pause pour éviter de saturer le CPU
@@ -243,7 +243,7 @@ class ConversationManager:
                 continue
 
             gen.tts_started = True
-            logger.info("Synthèse TTS démarrée...")
+            logger.debug("Synthèse TTS démarrée...")
 
             # Générateur qui consomme la queue
             def text_chunks():
@@ -262,19 +262,19 @@ class ConversationManager:
                         continue
 
             try:
-                # Synthétiser et jouer l'audio
-                # La méthode synthesize_generator() va streamer les chunks
+                # Synthétiser et jouer l'audio directement
+                # La méthode synthesize_generator() va jouer sur les haut-parleurs
                 completed = self.tts.synthesize_generator(
                     text_chunks(),
-                    audio_chunks_queue=None,  # Pas de queue externe, lecture directe
-                    abort_event=self.abort_event,
+                    audio_chunks=None,  # Pas de queue, lecture directe sur haut-parleurs
+                    stop_event=self.abort_event,
                 )
 
                 if completed and not self.abort_event.is_set():
                     gen.tts_completed = True
-                    logger.info("Synthèse TTS terminée")
+                    logger.debug("Synthèse TTS terminée")
                 else:
-                    logger.info("Synthèse TTS interrompue")
+                    logger.debug("Synthèse TTS interrompue")
 
             except Exception as e:
                 logger.error(f"Erreur TTS: {e}", exc_info=True)
@@ -284,7 +284,7 @@ class ConversationManager:
         if not self.current_generation:
             return
 
-        logger.info("Interruption de la génération en cours...")
+        logger.debug("Interruption de la génération en cours...")
 
         # Signaler l'interruption
         self.abort_event.set()
@@ -297,7 +297,8 @@ class ConversationManager:
 
         # Arrêter le TTS
         try:
-            self.tts.stop()
+            if hasattr(self.tts, "stream"):
+                self.tts.stream.stop()
         except Exception as e:
             logger.error(f"Erreur lors de l'arrêt TTS: {e}")
 
@@ -314,24 +315,24 @@ class ConversationManager:
         # Clear l'event d'interruption
         self.abort_event.clear()
 
-        logger.info("Interruption complète")
+        logger.debug("Interruption complète")
 
     def start(self):
         """Démarre le système de conversation"""
-        logger.info("Démarrage de l'assistant vocal...")
+        logger.debug("Démarrage de l'assistant vocal...")
 
         # Démarrer les workers
         self._start_workers()
 
         # Démarrer le STT (écoute du microphone)
-        logger.info("Démarrage de l'écoute...")
-        # Le STT démarre automatiquement dans TranscriptionProcessor
+        logger.debug("Démarrage de l'écoute...")
+        self.stt.transcribe_loop()
 
-        logger.info("Assistant vocal prêt!")
+        logger.debug("Assistant vocal prêt!")
 
     def shutdown(self):
         """Arrête proprement le système"""
-        logger.info("Arrêt de l'assistant...")
+        logger.debug("Arrêt de l'assistant...")
 
         # Signaler l'arrêt
         self.shutdown_event.set()
@@ -339,13 +340,13 @@ class ConversationManager:
         # Arrêter les composants
         try:
             if self.stt:
-                self.stt.close()
+                self.stt.shutdown()
         except Exception as e:
             logger.error(f"Erreur lors de l'arrêt STT: {e}")
 
         try:
-            if self.tts:
-                self.tts.stop()
+            if self.tts and hasattr(self.tts, "stream"):
+                self.tts.stream.stop()
         except Exception as e:
             logger.error(f"Erreur lors de l'arrêt TTS: {e}")
 
@@ -355,4 +356,4 @@ class ConversationManager:
         if self.tts_thread:
             self.tts_thread.join(timeout=2.0)
 
-        logger.info("Assistant arrêté")
+        logger.debug("Assistant arrêté")

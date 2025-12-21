@@ -84,7 +84,7 @@ def _check_ollama_connection(base_url: str, session: Optional[Session]) -> bool:
         # Use a shorter timeout for the check
         response = session.get(check_endpoint, timeout=5.0)
         response.raise_for_status()
-        logger.info(f" Successfully connected to Ollama server via HTTP at: {base_url}")
+        logger.debug(f" Successfully connected to Ollama server via HTTP at: {base_url}")
         return True
     except requests.exceptions.ConnectionError as e:
         # Log specific connection error, but return False for caller to handle
@@ -115,10 +115,10 @@ def _run_ollama_ps():
         (command not found, execution error, timeout).
     """
     try:
-        logger.info("🩺 Attempting to run 'ollama ps' to check server status...")
+        logger.debug("🩺 Attempting to run 'ollama ps' to check server status...")
         # Added timeout to prevent hanging indefinitely
         result = subprocess.run(["ollama", "ps"], check=True, capture_output=True, text=True, timeout=10.0)
-        logger.info(f"🩺 'ollama ps' executed successfully. Output:\n{result.stdout.strip()}")
+        logger.debug(f"🩺 'ollama ps' executed successfully. Output:\n{result.stdout.strip()}")
         return True
     except FileNotFoundError:
         logger.error(" 'ollama ps' command not found. Make sure Ollama is installed and in your PATH.")
@@ -173,8 +173,8 @@ class LLM:
             ValueError: If an unsupported provider is specified.
             ImportError: If required libraries for the selected provider are not installed.
         """
-        # logger.info(f"️ Initializing LLM with provider: {provider}, model: {model}, system_prompt: {system_prompt}")
-        logger.info(f"️Initializing LLM with provider: {provider}, model: {model}, system_prompt: ...")
+        # logger.debug(f"️ Initializing LLM with provider: {provider}, model: {model}, system_prompt: {system_prompt}")
+        logger.debug(f"️Initializing LLM with provider: {provider}, model: {model}, system_prompt: ...")
         self.provider = provider.lower()
         if self.provider not in self.SUPPORTED_PROVIDERS:
             raise ValueError(f"Unsupported provider '{provider}'. Supported: {self.SUPPORTED_PROVIDERS}")
@@ -196,7 +196,7 @@ class LLM:
         self._requests_lock = Lock()
         self._ollama_connection_ok: bool = False  # Added explicit init
 
-        logger.info(f"️Configuring LLM instance: provider='{self.provider}', model='{self.model}'")
+        logger.debug(f"️Configuring LLM instance: provider='{self.provider}', model='{self.model}'")
 
         self.effective_ollama_url = self._base_url or OLLAMA_BASE_URL if self.provider == "ollama" else None
 
@@ -210,7 +210,7 @@ class LLM:
 
         if self.provider == "ollama" and REQUESTS_AVAILABLE:
             self.ollama_session = requests.Session()
-            logger.info("Initialized requests.Session for Ollama provider.")
+            logger.debug("Initialized requests.Session for Ollama provider.")
 
         self.system_prompt_message = None
         if self.system_prompt:
@@ -218,7 +218,7 @@ class LLM:
                 "role": "system",
                 "content": self.system_prompt,
             }
-            logger.info("System prompt set.")
+            logger.debug("System prompt set.")
 
     def _lazy_initialize_clients(self) -> bool:
         """
@@ -262,7 +262,7 @@ class LLM:
                             )
                             if _run_ollama_ps():
                                 # ollama ps ran, wait a bit and try connecting again
-                                logger.info(
+                                logger.debug(
                                     " 'ollama ps' succeeded, waiting 3 seconds before re-checking connection..."
                                 )
                                 time.sleep(3)
@@ -270,7 +270,7 @@ class LLM:
                                     self.effective_ollama_url, self.ollama_session
                                 )
                                 if second_check_ok:
-                                    logger.info("Ollama connection successful after running 'ollama ps'.")
+                                    logger.debug("Ollama connection successful after running 'ollama ps'.")
                                     init_ok = True
                                     self._ollama_connection_ok = True
                                 else:
@@ -288,7 +288,7 @@ class LLM:
                         init_ok = False
 
                 if init_ok:
-                    logger.info(f" Client/Connection initialized successfully for provider: {self.provider}.")
+                    logger.debug(f" Client/Connection initialized successfully for provider: {self.provider}.")
                 else:
                     logger.error(f" Initialization failed for provider: {self.provider}.")
             except Exception as e:
@@ -325,13 +325,13 @@ class LLM:
                 if not self._active_requests:
                     logger.debug("️ Cancel all requested, but no active requests found.")
                     return False
-                logger.info(f"️ Attempting to cancel ALL active generation requests ({len(self._active_requests)}).")
+                logger.debug(f"️ Attempting to cancel ALL active generation requests ({len(self._active_requests)}).")
                 ids_to_cancel = list(self._active_requests.keys())
             else:
                 if request_id not in self._active_requests:
                     logger.warning(f"️ Cancel requested for ID '{request_id}', but it's not an active request.")
                     return False
-                logger.info(f"️ Attempting to cancel generation request: {request_id}")
+                logger.debug(f"️ Attempting to cancel generation request: {request_id}")
                 ids_to_cancel.append(request_id)
 
             # Perform the cancellation
@@ -372,7 +372,7 @@ class LLM:
                 if hasattr(stream_obj, "close") and callable(stream_obj.close):
                     logger.debug(f"️ [{request_id}] Attempting to close stream/response object...")
                     stream_obj.close()
-                    logger.info(f"️ Closed stream/response for cancelled request {request_id}.")
+                    logger.debug(f"️ Closed stream/response for cancelled request {request_id}.")
                 else:
                     logger.warning(
                         f"️ [{request_id}] Stream object of type {type(stream_obj)} does not have a callable 'close' method. Cannot explicitly close."
@@ -387,7 +387,7 @@ class LLM:
             logger.warning(f"️ [{request_id}] No stream object found in request data to close.")
 
         # Log the removal from tracking
-        logger.info(f"️ Removed generation request {request_id} from tracking (close attempted).")
+        logger.debug(f"️ Removed generation request {request_id} from tracking (close attempted).")
         return True  # Indicate removal occurred
 
     def _register_request(self, request_id: str, request_type: str, stream_obj: Optional[Any]):
@@ -437,13 +437,13 @@ class LLM:
             ]
 
         if stale_ids:
-            logger.info(f" Found {len(stale_ids)} potentially stale requests (>{timeout_seconds}s). Cleaning up...")
+            logger.debug(f" Found {len(stale_ids)} potentially stale requests (>{timeout_seconds}s). Cleaning up...")
             cleaned_count = 0
             for req_id in stale_ids:
                 # cancel_generation handles locking internally and now attempts to close stream
                 if self.cancel_generation(req_id):
                     cleaned_count += 1
-            logger.info(f" Cleaned up {cleaned_count}/{len(stale_ids)} stale requests (attempted stream close).")
+            logger.debug(f" Cleaned up {cleaned_count}/{len(stale_ids)} stale requests (attempted stream close).")
             return cleaned_count
         return 0
 
@@ -464,7 +464,7 @@ class LLM:
             False if initialization or generation failed after retries.
         """
         prompt = "Respond with only the word 'OK'."
-        logger.info(f" Attempting prewarm for '{self.model}' on provider '{self.provider}'...")
+        logger.debug(f" Attempting prewarm for '{self.model}' on provider '{self.provider}'...")
 
         # Lazy initialization now includes the 'ollama ps' logic if needed
         if not self._lazy_initialize_clients():
@@ -482,7 +482,7 @@ class LLM:
             first_token_time = None
 
             try:
-                logger.info(
+                logger.debug(
                     f" Prewarm Attempt {attempts + 1}/{max_retries + 1} calling generate (ID: {prewarm_request_id})..."
                 )
                 generator = self.generate(
@@ -498,12 +498,12 @@ class LLM:
                 for token in generator:
                     if first_token_time is None:
                         first_token_time = time.time()
-                        logger.info(f"️ Prewarm TTFT: {(first_token_time - gen_start_time):.4f}s")
+                        logger.debug(f"️ Prewarm TTFT: {(first_token_time - gen_start_time):.4f}s")
                     full_response += token
                     token_count += 1
                 # End of loop means generator is exhausted
                 gen_end_time = time.time()
-                logger.info(
+                logger.debug(
                     f"ℹ️ Prewarm consumed {token_count} tokens in {(gen_end_time - gen_start_time):.4f}s. Full response: '{full_response}'"
                 )
 
@@ -512,7 +512,7 @@ class LLM:
                 # else: pass # If we got content, great.
 
                 prewarm_end_time = time.time()
-                logger.info(
+                logger.debug(
                     f" Prewarm successful (generation finished naturally). Total time: {(prewarm_end_time - prewarm_start_time):.4f}s."
                 )
                 return True
@@ -530,7 +530,7 @@ class LLM:
                 if attempts < max_retries:
                     attempts += 1
                     wait_time = 2 * attempts
-                    logger.info(f" Retrying prewarm generation in {wait_time}s...")
+                    logger.debug(f" Retrying prewarm generation in {wait_time}s...")
                     time.sleep(wait_time)
                     # Force re-check on next attempt via lazy_init in generate()
                     # Crucially, setting this False forces _lazy_initialize_clients to run again
@@ -623,7 +623,7 @@ class LLM:
             raise RuntimeError(f"LLM provider '{self.provider}' client failed to initialize.")
 
         req_id = request_id if request_id else f"{self.provider}-{uuid.uuid4()}"
-        logger.info(f"Starting generation (Request ID: {req_id})")
+        logger.debug(f"Starting generation (Request ID: {req_id})")
 
         messages = []
         if use_system_prompt and self.system_prompt_message:
@@ -636,7 +636,7 @@ class LLM:
             if self.no_think:
                 # This modification logic remains specific for now
                 added_text = f"{text}/nothink"  # for qwen 3
-            logger.info(f" llm_module.py generate adding role user to messages, content: {added_text}")
+            logger.debug(f" llm_module.py generate adding role user to messages, content: {added_text}")
             messages.append({"role": "user", "content": added_text})
         logger.debug(f"[{req_id}] Prepared messages count: {len(messages)}")
 
@@ -662,8 +662,8 @@ class LLM:
                     "stream": True,
                     "options": options,
                 }
-                logger.info(f" [{req_id}] Sending Ollama request to {ollama_api_url} with payload:")
-                logger.info(f"{json.dumps(payload, indent=2)}")
+                logger.debug(f" [{req_id}] Sending Ollama request to {ollama_api_url} with payload:")
+                logger.debug(f"{json.dumps(payload, indent=2)}")
                 # Increase read timeout significantly for generation
                 response = self.ollama_session.post(
                     ollama_api_url,
@@ -680,7 +680,7 @@ class LLM:
                 # This case should technically be caught by __init__
                 raise ValueError(f"provider '{self.provider}' generation logic not implemented.")
 
-            logger.info(f" Finished generating stream successfully (request_id: {req_id})")
+            logger.debug(f" Finished generating stream successfully (request_id: {req_id})")
 
         # Catch specific exceptions first
         except (
@@ -756,7 +756,7 @@ class LLM:
                     # Check for cancellation *before* processing chunk
                     with self._requests_lock:
                         if request_id not in self._active_requests:
-                            logger.info(
+                            logger.debug(
                                 f"️ Ollama stream {request_id} cancelled or finished externally during iteration (pre-chunk check)."
                             )
                             break  # Exit the loop cleanly
@@ -836,7 +836,7 @@ class LLM:
             if not processed_done:  # Only log this if we didn't finish normally
                 with self._requests_lock:
                     if request_id not in self._active_requests:
-                        logger.info(
+                        logger.debug(
                             f"️ Ollama stream {request_id} processing stopped due to cancellation flag after loop."
                         )
 
@@ -929,7 +929,7 @@ class LLM:
         # ---------------------------------------------
 
         req_id = f"measure-{self.provider}-{uuid.uuid4()}"
-        logger.info(
+        logger.debug(
             f"️ Measuring inference time for {num_tokens} tokens (Request ID: {req_id}). Using fixed measurement prompt."
         )
         logger.debug(f"️ [{req_id}] Measurement history: {measurement_history}")
@@ -1008,7 +1008,7 @@ class LLM:
         duration_sec = end_time - start_time
         duration_ms = duration_sec * 1000
 
-        logger.info(
+        logger.debug(
             f"️ Measured ~{duration_ms:.2f} ms for {actual_tokens_generated} tokens "
             f"(target: {num_tokens}) for model '{self.model}' on provider '{self.provider}' using fixed prompt. (Request ID: {req_id})"
         )
@@ -1138,7 +1138,7 @@ if __name__ == "__main__":
         stream=sys.stdout,
     )
     main_logger = logging.getLogger(__name__)  # Logger for this __main__ block
-    main_logger.info(" --- Running LLM Module Example (With Ollama PS Check Restored) ---")  # Modified title
+    main_logger.debug(" --- Running LLM Module Example (With Ollama PS Check Restored) ---")  # Modified title
 
     # --- Ollama Example ---
     ollama_llm = None
@@ -1150,7 +1150,7 @@ if __name__ == "__main__":
                 main_logger.warning("️ OLLAMA_MODEL environment variable not set. Using default 'llama3:instruct'.")
                 ollama_model_env = "llama3:instruct"
 
-            main_logger.info(f"\n️ --- Initializing Ollama ({ollama_model_env}) ---")
+            main_logger.debug(f"\n️ --- Initializing Ollama ({ollama_model_env}) ---")
             # Pass the model name fetched from env var
             ollama_llm = LLM(
                 provider="ollama",
@@ -1159,22 +1159,22 @@ if __name__ == "__main__":
             )
 
             # Prewarm will now trigger lazy init WITH the ps check fallback restored
-            main_logger.info(" --- Running Ollama Prewarm (will trigger lazy init with ps check if needed) ---")
+            main_logger.debug(" --- Running Ollama Prewarm (will trigger lazy init with ps check if needed) ---")
             prewarm_success = ollama_llm.prewarm(max_retries=0)  # Only one attempt for prewarm after init
 
             if prewarm_success:
-                main_logger.info("Ollama Prewarm/Initialization OK.")
+                main_logger.debug("Ollama Prewarm/Initialization OK.")
 
                 # --- Run Measurement ---
-                main_logger.info("️ --- Running Ollama Inference Time Measurement ---")
+                main_logger.debug("️ --- Running Ollama Inference Time Measurement ---")
                 inf_time = ollama_llm.measure_inference_time(num_tokens=10, temperature=0.1)
                 if inf_time is not None:
-                    main_logger.info(f"️ --- Measured Inference Time: {inf_time:.2f} ms ---")
+                    main_logger.debug(f"️ --- Measured Inference Time: {inf_time:.2f} ms ---")
                 else:
                     main_logger.warning("️️ --- Inference Time Measurement Failed ---")
 
                 # --- Run Generation ---
-                main_logger.info("▶️ --- Running Ollama Generation via Context (Post-Prewarm) ---")
+                main_logger.debug("▶️ --- Running Ollama Generation via Context (Post-Prewarm) ---")
                 try:
                     # Use the context manager
                     with LLMGenerationContext(
@@ -1186,16 +1186,16 @@ if __name__ == "__main__":
                             print(token, end="", flush=True)
                             response_text += token
                         print("\n")  # Newline after response
-                    main_logger.info("Ollama generation complete.")
+                    main_logger.debug("Ollama generation complete.")
 
                     # Example of direct generate call (after context)
-                    main_logger.info(" --- Running Ollama Generation via direct call ---")
+                    main_logger.debug(" --- Running Ollama Generation via direct call ---")
                     direct_gen = ollama_llm.generate("List three large cities in Germany.")
                     print("\nOllama Direct Response: ", end="", flush=True)
                     for token in direct_gen:
                         print(token, end="", flush=True)
                     print("\n")
-                    main_logger.info("Ollama direct generation complete.")
+                    main_logger.debug("Ollama direct generation complete.")
 
                 except (ConnectionError, RuntimeError, Exception) as e:
                     # Catch specific ConnectionError raised on init/gen failure
@@ -1220,5 +1220,5 @@ if __name__ == "__main__":
     else:
         main_logger.warning("️ Skipping Ollama tests: 'requests' library not installed.")
 
-    main_logger.info("\n" + "=" * 40)
-    main_logger.info("--- LLM Module Example Script Finished ---")
+    main_logger.debug("\n" + "=" * 40)
+    main_logger.debug("--- LLM Module Example Script Finished ---")

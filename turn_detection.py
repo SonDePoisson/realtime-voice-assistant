@@ -171,9 +171,7 @@ def interpolate_detection(prob: float) -> float:
             return v1 + ratio * (v2 - v1)
 
     # Fallback: Should not be reached if anchor_points cover [0,1] properly.
-    logger.warning(
-        f"️ Probability {p} fell outside defined anchor points {anchor_points}. Returning fallback value."
-    )
+    logger.warning(f"️ Probability {p} fell outside defined anchor points {anchor_points}. Returning fallback value.")
     return 4.0
 
 
@@ -214,12 +212,8 @@ class TurnDetection:
 
         self.current_waiting_time: float = -1  # Tracks the last suggested time
         # Use deques with maxlen for efficient, bounded history storage
-        self.text_time_deque: collections.deque[tuple[float, str]] = collections.deque(
-            maxlen=100
-        )
-        self.texts_without_punctuation: collections.deque[tuple[str, str]] = (
-            collections.deque(maxlen=20)
-        )
+        self.text_time_deque: collections.deque[tuple[float, str]] = collections.deque(maxlen=100)
+        self.texts_without_punctuation: collections.deque[tuple[str, str]] = collections.deque(maxlen=20)
 
         self.text_queue: queue.Queue[str] = queue.Queue()  # Queue for incoming text
         self.text_worker = threading.Thread(
@@ -229,11 +223,9 @@ class TurnDetection:
         self.text_worker.start()
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        logger.info(f"Using device: {self.device}")
+        logger.debug(f"Using device: {self.device}")
         self.tokenizer = transformers.DistilBertTokenizerFast.from_pretrained(model_dir)
-        self.classification_model = (
-            transformers.DistilBertForSequenceClassification.from_pretrained(model_dir)
-        )
+        self.classification_model = transformers.DistilBertForSequenceClassification.from_pretrained(model_dir)
         self.classification_model.to(self.device)
         self.classification_model.eval()  # Set model to evaluation mode
         self.max_length: int = 128  # Max sequence length for the model
@@ -241,15 +233,11 @@ class TurnDetection:
         self.pipeline_latency_overhead: float = pipeline_latency_overhead
 
         # Initialize completion probability cache with OrderedDict for LRU behavior
-        self._completion_probability_cache: collections.OrderedDict[str, float] = (
-            collections.OrderedDict()
-        )
-        self._completion_probability_cache_max_size: int = (
-            256  # Max size for the LRU cache
-        )
+        self._completion_probability_cache: collections.OrderedDict[str, float] = collections.OrderedDict()
+        self._completion_probability_cache_max_size: int = 256  # Max size for the LRU cache
 
         # Warmup the classification model for faster initial predictions
-        logger.info("Warming up the classification model...")
+        logger.debug("Warming up the classification model...")
         with torch.no_grad():
             warmup_text = "This is a warmup sentence."
             inputs = self.tokenizer(
@@ -261,7 +249,7 @@ class TurnDetection:
             )
             inputs = {key: value.to(self.device) for key, value in inputs.items()}
             _ = self.classification_model(**inputs)  # Run one prediction
-        logger.info("Classification model warmed up.")
+        logger.debug("Classification model warmed up.")
 
         # Default dynamic pause settings (initialized for speed_factor=0.0)
         self.detection_speed: float = 0.5
@@ -323,15 +311,10 @@ class TurnDetection:
         self.question_pause = fast["question_pause"] + speed_factor * (
             very_slow["question_pause"] - fast["question_pause"]
         )
-        self.unknown_sentence_detection_pause = fast[
-            "unknown_sentence_detection_pause"
-        ] + speed_factor * (
-            very_slow["unknown_sentence_detection_pause"]
-            - fast["unknown_sentence_detection_pause"]
+        self.unknown_sentence_detection_pause = fast["unknown_sentence_detection_pause"] + speed_factor * (
+            very_slow["unknown_sentence_detection_pause"] - fast["unknown_sentence_detection_pause"]
         )
-        logger.info(
-            f"️ Updated turn detection settings with speed_factor={speed_factor:.2f}"
-        )
+        logger.debug(f"️ Updated turn detection settings with speed_factor={speed_factor:.2f}")
 
     def suggest_time(
         self,
@@ -372,9 +355,7 @@ class TurnDetection:
         """
         # Check cache first
         if sentence in self._completion_probability_cache:
-            self._completion_probability_cache.move_to_end(
-                sentence
-            )  # Mark as recently used
+            self._completion_probability_cache.move_to_end(sentence)  # Mark as recently used
             return self._completion_probability_cache[sentence]
 
         # If not in cache, run model prediction
@@ -401,18 +382,11 @@ class TurnDetection:
 
         # Store the result in the cache
         self._completion_probability_cache[sentence] = prob_complete
-        self._completion_probability_cache.move_to_end(
-            sentence
-        )  # Mark as recently used
+        self._completion_probability_cache.move_to_end(sentence)  # Mark as recently used
 
         # Maintain cache size (LRU eviction)
-        if (
-            len(self._completion_probability_cache)
-            > self._completion_probability_cache_max_size
-        ):
-            self._completion_probability_cache.popitem(
-                last=False
-            )  # Remove the least recently used item
+        if len(self._completion_probability_cache) > self._completion_probability_cache_max_size:
+            self._completion_probability_cache.popitem(last=False)  # Remove the least recently used item
 
         return prob_complete
 
@@ -471,7 +445,7 @@ class TurnDetection:
                 continue
 
             # --- Processing starts when text is received ---
-            logger.info(f'️ Starting pause calculation for: "{text}"')
+            logger.debug(f'️ Starting pause calculation for: "{text}"')
 
             processed_text = preprocess_text(text)  # Apply initial cleaning
 
@@ -479,9 +453,7 @@ class TurnDetection:
             current_time = time.time()
             self.text_time_deque.append((current_time, processed_text))
             text_without_punctuation = strip_ending_punctuation(processed_text)
-            self.texts_without_punctuation.append(
-                (processed_text, text_without_punctuation)
-            )
+            self.texts_without_punctuation.append((processed_text, text_without_punctuation))
 
             # Analyze recent matching texts for consistent punctuation pauses
             matches = find_matching_texts(self.texts_without_punctuation)
@@ -491,9 +463,7 @@ class TurnDetection:
             if matches:  # Avoid division by zero if matches is empty
                 for i, match in enumerate(matches):
                     same_text, _ = match  # We only need the original text here
-                    whisper_suggested_pause_match = self.get_suggested_whisper_pause(
-                        same_text
-                    )
+                    whisper_suggested_pause_match = self.get_suggested_whisper_pause(same_text)
                     added_pauses += whisper_suggested_pause_match
                     if ends_with_string(same_text, "..."):
                         contains_ellipses = True
@@ -510,13 +480,9 @@ class TurnDetection:
             # Prepare text for the sentence completion model (remove all punctuation)
             import string
 
-            transtext = processed_text.translate(
-                str.maketrans("", "", string.punctuation)
-            )
+            transtext = processed_text.translate(str.maketrans("", "", string.punctuation))
             # Further clean potentially remaining non-alphanumeric chars at the end
-            cleaned_for_model = re.sub(
-                r"[^a-zA-Z\s]+$", "", transtext
-            ).rstrip()  # Also remove trailing spaces
+            cleaned_for_model = re.sub(r"[^a-zA-Z\s]+$", "", transtext).rstrip()  # Also remove trailing spaces
 
             # Get sentence completion probability
             prob_complete = self.get_completion_probability(cleaned_for_model)
@@ -538,22 +504,20 @@ class TurnDetection:
             if contains_ellipses:
                 final_pause += 0.2
 
-            logger.info(
+            logger.debug(
                 f' Calculated pauses: Punct={whisper_suggested_pause:.2f}, Model={sentence_finished_model_pause:.2f}, Weighted={weighted_pause:.2f}, Final={final_pause:.2f} for "{processed_text}" (Prob={prob_complete:.2f})'
             )
 
             # Ensure final pause is not less than the pipeline latency overhead
             min_pause = self.pipeline_latency + self.pipeline_latency_overhead
             if final_pause < min_pause:
-                logger.info(
+                logger.debug(
                     f"️ Final pause ({final_pause:.2f}s) is less than minimum ({min_pause:.2f}s). Using minimum."
                 )
                 final_pause = min_pause
 
             # Suggest the calculated time via callback
-            self.suggest_time(
-                final_pause, processed_text
-            )  # Use processed_text for context
+            self.suggest_time(final_pause, processed_text)  # Use processed_text for context
 
             # Mark task as done for the queue (important if using queue.join())
             self.text_queue.task_done()
@@ -568,7 +532,7 @@ class TurnDetection:
         Args:
             text: The text segment (e.g., from STT) to be processed.
         """
-        logger.info(f' Queuing text for pause calculation: "{text}"')
+        logger.debug(f' Queuing text for pause calculation: "{text}"')
         self.text_queue.put(text)
 
     def reset(self) -> None:
@@ -579,7 +543,7 @@ class TurnDetection:
         current waiting time tracker. Useful for starting a new conversation or
         interaction context.
         """
-        logger.info("Resetting TurnDetection state.")
+        logger.debug("Resetting TurnDetection state.")
         # Clear the history deques
         self.text_time_deque.clear()
         self.texts_without_punctuation.clear()

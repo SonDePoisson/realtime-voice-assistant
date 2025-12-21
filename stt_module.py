@@ -160,7 +160,7 @@ class TranscriptionProcessor:
         self.recorder_config["language"] = self.source_language  # Ensure language is set
 
         if USE_TURN_DETECTION:
-            logger.info("Turn detection enabled")
+            logger.debug("Turn detection enabled")
             self.turn_detection = TurnDetection(
                 on_new_waiting_time=self.on_new_waiting_time,
                 local=local,
@@ -278,7 +278,7 @@ class TranscriptionProcessor:
                     if time_since_silence > potential_sentence_end_time:
                         # Check if realtime_text exists before logging/detecting
                         current_text = self.realtime_text if self.realtime_text else ""
-                        logger.info(f"Potential sentence end detected (timed out): {current_text}")
+                        logger.debug(f"Potential sentence end detected (timed out): {current_text}")
                         # Use force_yield=True because this is triggered by timeout, not punctuation detection
                         self.detect_potential_sentence_end(
                             current_text, force_yield=True, force_ellipses=True
@@ -335,7 +335,7 @@ class TranscriptionProcessor:
             current_duration = self._get_recorder_param("post_speech_silence_duration")
             if current_duration != waiting_time:
                 log_text = text if text else "(No text provided)"
-                logger.info(f"New waiting time: {waiting_time:.2f} for text: {log_text}")
+                logger.debug(f"New waiting time: {waiting_time:.2f} for text: {log_text}")
                 self._set_recorder_param("post_speech_silence_duration", waiting_time)
         else:
             logger.warning("️ Recorder not initialized, cannot set new waiting time.")
@@ -355,7 +355,7 @@ class TranscriptionProcessor:
                 return
 
             self.final_transcription = text
-            logger.info(f"Final user text: {text}")
+            logger.debug(f"Final user text: {text}")
             self.sentence_end_cache.clear()
             self.potential_sentences_yielded.clear()
 
@@ -392,7 +392,7 @@ class TranscriptionProcessor:
         to be reset or interrupted externally.
         """
         self.potential_sentences_yielded.clear()
-        logger.info("️ Potential sentence yield cache cleared (generation aborted).")
+        logger.debug("️ Potential sentence yield cache cleared (generation aborted).")
 
     def perform_final(self, audio_bytes: Optional[bytes] = None) -> None:
         """
@@ -415,7 +415,7 @@ class TranscriptionProcessor:
                 current_text = self.realtime_text
 
             self.final_transcription = current_text  # Update internal state
-            logger.info(f"Forced Final user text: {current_text}")
+            logger.debug(f"Forced Final user text: {current_text}")
             self.sentence_end_cache.clear()
             self.potential_sentences_yielded.clear()
 
@@ -561,7 +561,7 @@ class TranscriptionProcessor:
                 # if len(self.potential_sentences_yielded) > MAX_YIELDED_SIZE:
                 #    self.potential_sentences_yielded.pop(0)
 
-                logger.info(f"️ Yielding potential sentence end: {stripped_text_raw}")
+                logger.debug(f"️ Yielding potential sentence end: {stripped_text_raw}")
                 if self.potential_sentence_end:
                     self.potential_sentence_end(stripped_text_raw)  # Callback with original punctuation
             # else: # No need to log this every time, can be noisy
@@ -576,7 +576,7 @@ class TranscriptionProcessor:
         """
         if self.silence_active != silence_active:
             self.silence_active = silence_active
-            logger.info(f"Silence state changed: {'ACTIVE' if silence_active else 'INACTIVE'}")
+            logger.debug(f"Silence state changed: {'ACTIVE' if silence_active else 'INACTIVE'}")
             if self.silence_active_callback:
                 self.silence_active_callback(silence_active)
 
@@ -683,7 +683,7 @@ class TranscriptionProcessor:
 
         def start_recording():
             """Callback triggered when recorder starts a new recording segment."""
-            logger.info("▶️ Recording started.")
+            logger.debug("▶️ Recording started.")
             self.set_silence(False)  # Ensure silence is marked inactive
             self.silence_time = 0.0  # Ensure silence timer is reset
             if self.on_recording_start_callback:
@@ -694,7 +694,7 @@ class TranscriptionProcessor:
             Callback triggered when recorder stops a recording segment, just
             before final transcription might be generated.
             """
-            logger.info("️ Recording stopped.")
+            logger.debug("️ Recording stopped.")
             # Get audio *before* recorder might clear it for final processing
             audio_copy = self.get_last_audio_copy()  # Use get_last_audio_copy for robustness
             if self.before_final_sentence:
@@ -728,7 +728,7 @@ class TranscriptionProcessor:
             # Log only significant changes or all partials based on debug level maybe
             if stripped_partial_user_text_new != self.stripped_partial_user_text:
                 self.stripped_partial_user_text = stripped_partial_user_text_new
-                logger.info(text)
+                logger.debug(text)
                 if self.realtime_transcription_callback:
                     self.realtime_transcription_callback(text)
                 if USE_TURN_DETECTION and hasattr(self, "turn_detection"):
@@ -766,7 +766,7 @@ class TranscriptionProcessor:
         padded_cfg = textwrap.indent(json.dumps(pretty_cfg, indent=2), "    ")
 
         recorder_type = "AudioToTextRecorderClient" if START_STT_SERVER else "AudioToTextRecorder"
-        logger.info(f"️ Creating {recorder_type} with params:")
+        logger.debug(f"️ Creating {recorder_type} with params:")
         print(padded_cfg)  # Use print for formatted JSON as logger might mangle it
 
         # --- Instantiate Recorder ---
@@ -783,7 +783,7 @@ class TranscriptionProcessor:
                 # Ensure wake words are disabled if needed (double check via param setting)
                 self._set_recorder_param("use_wake_words", False)  # Uses the helper method
 
-            logger.info(f"{recorder_type} instance created successfully.")
+            logger.debug(f"{recorder_type} instance created successfully.")
 
         except Exception as e:
             # Log the exception with traceback for detailed debugging
@@ -826,29 +826,29 @@ class TranscriptionProcessor:
         further processing. Sets the `shutdown_performed` flag.
         """
         if not self.shutdown_performed:
-            logger.info("Shutting down TranscriptionProcessor...")
+            logger.debug("Shutting down TranscriptionProcessor...")
             self.shutdown_performed = True  # Set flag early to stop loops/threads
 
             if self.recorder:
-                logger.info("Calling recorder shutdown()...")
+                logger.debug("Calling recorder shutdown()...")
                 try:
                     self.recorder.shutdown()
-                    logger.info("Recorder shutdown() method completed.")
+                    logger.debug("Recorder shutdown() method completed.")
                 except Exception as e:
                     logger.error(f"Error during recorder shutdown: {e}", exc_info=True)
                 finally:
                     self.recorder = None
             else:
-                logger.info("No active recorder instance to shut down.")
+                logger.debug("No active recorder instance to shut down.")
 
             # Clean up other resources if necessary (e.g., turn detection?)
             if USE_TURN_DETECTION and hasattr(self, "turn_detection") and hasattr(self.turn_detection, "shutdown"):
-                logger.info("Shutting down TurnDetection...")
+                logger.debug("Shutting down TurnDetection...")
                 try:
                     self.turn_detection.shutdown()  # Example: Assuming TurnDetection has a shutdown method
                 except Exception as e:
                     logger.error(f"Error during TurnDetection shutdown: {e}", exc_info=True)
 
-            logger.info("TranscriptionProcessor shutdown process finished.")
+            logger.debug("TranscriptionProcessor shutdown process finished.")
         else:
-            logger.info("ℹ️ Shutdown already performed.")
+            logger.debug("ℹ️ Shutdown already performed.")
