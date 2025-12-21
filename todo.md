@@ -1,0 +1,4 @@
+- Propose more TTS (such as EdgeTTS and orpheus)
+- Check Unused code to remove it
+- Clean and Uniform all code
+- Explain code (Architecture, Logic and Details like threads, turn activation etc...) in README.md
