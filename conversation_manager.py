@@ -268,24 +268,46 @@ class ConversationManager:
                         continue
 
             try:
-                # Synthétiser dans la queue audio (pas de lecture directe)
-                completed = self.tts.synthesize_generator(
-                    text_chunks(),
-                    audio_chunks=gen.audio_queue,  # Mettre l'audio dans la queue
-                    stop_event=self.abort_event,
-                )
+                # EdgeTTS joue directement via MPV (MP3/Opus), pas via queue+PyAudio
+                # Les autres engines (Kokoro) utilisent la queue audio
+                if self.tts.uses_direct_playback:
+                    # Direct playback: pas de queue audio
+                    completed = self.tts.synthesize_generator(
+                        text_chunks(),
+                        audio_chunks=None,  # Pas de queue, lecture directe
+                        stop_event=self.abort_event,
+                    )
+                    # Pas besoin de signaler l'audio_player car il ne sera pas utilisé
+                else:
+                    # Queue audio: Synthétiser dans la queue pour PyAudio
+                    completed = self.tts.synthesize_generator(
+                        text_chunks(),
+                        audio_chunks=gen.audio_queue,  # Mettre l'audio dans la queue
+                        stop_event=self.abort_event,
+                    )
 
                 if completed and not self.abort_event.is_set():
                     gen.tts_completed = True
-                    gen.audio_queue.put(None)  # Signal de fin pour l'audio player
+                    if not self.tts.uses_direct_playback:
+                        gen.audio_queue.put(None)  # Signal de fin pour l'audio player
+                    else:
+                        # Direct playback: audio déjà joué, marquer comme terminé
+                        gen.audio_started = True
+                        gen.audio_completed = True
                     logger.debug("-- [DONE] TTS")
                 else:
-                    gen.audio_queue.put(None)  # Signal de fin même si interrompu
+                    if not self.tts.uses_direct_playback:
+                        gen.audio_queue.put(None)  # Signal de fin même si interrompu
+                    else:
+                        # Direct playback: audio interrompu
+                        gen.audio_started = True
+                        gen.audio_completed = False
                     logger.debug("-- [STOP] TTS")
 
             except Exception as e:
                 logger.error(f"-- [ERROR] TTS: {e}", exc_info=True)
-                gen.audio_queue.put(None)  # Signal de fin en cas d'erreur
+                if not self.tts.uses_direct_playback:
+                    gen.audio_queue.put(None)  # Signal de fin en cas d'erreur
 
     def _audio_player_worker(self):
         """
@@ -293,10 +315,21 @@ class ConversationManager:
 
         Attend que des chunks audio soient disponibles dans audio_queue,
         puis les joue sur les haut-parleurs via pyaudio.
+
+        Note: Si EdgeTTS est utilisé (direct playback), ce worker ne fait rien
+        car l'audio est joué directement par RealtimeTTS via MPV.
         """
         import pyaudio
 
         logger.debug("-- [START] Audio")
+
+        # Si EdgeTTS (direct playback), ce worker n'est pas nécessaire
+        if self.tts.uses_direct_playback:
+            logger.debug("-- [SKIP] Audio player (using direct playback via MPV)")
+            while not self.shutdown_event.is_set():
+                time.sleep(0.1)
+            logger.debug("-- [SHUTDOWN] Audio Player (was idle)")
+            return
 
         # Initialiser PyAudio une seule fois (réutilisé pour toutes les générations)
         p = pyaudio.PyAudio()
@@ -321,7 +354,7 @@ class ConversationManager:
                     stream = p.open(
                         format=pyaudio.paInt16,
                         channels=1,
-                        rate=24000,
+                        rate=self.tts.sample_rate,  # Utiliser le sample rate de l'engine TTS
                         output=True,
                         frames_per_buffer=4096,
                     )

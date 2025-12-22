@@ -25,7 +25,7 @@ KOKORO_VOICES = {
     "en": "af_heart",  # Voix anglaise féminine
 }
 EDGE_TTS_VOICES = {
-    "fr": "en-US-AvaMultilingualNeural",
+    "fr": "en-US-AvaMultilingualNeural",  # Voix française féminine
     "en": "en-US-AvaMultilingualNeural",  # Voix anglaise multilingue
 }
 Silence = namedtuple("Silence", ("comma", "sentence", "default"))
@@ -73,6 +73,13 @@ class AudioProcessor:
 
         self.silence = ENGINE_SILENCES.get(engine, ENGINE_SILENCES[self.engine_name])
         self.current_stream_chunk_size = QUICK_ANSWER_STREAM_CHUNK_SIZE  # Initial chunk size
+
+        # Sample rate par engine
+        self.sample_rate = 24000
+
+        # EdgeTTS génère du MP3/Opus et doit être joué directement via MPV
+        # Les autres engines (Kokoro) génèrent du PCM qu'on peut gérer manuellement
+        self.uses_direct_playback = engine == "edge_tts"
 
         # Dynamically load and configure the selected TTS engine
         if engine == "kokoro":
@@ -214,7 +221,7 @@ class AudioProcessor:
         good_streak: int = 0
         buffering: bool = True
         buf_dur: float = 0.0
-        SR, BPS = 24000, 2  # Assumed Sample Rate and Bytes Per Sample (16-bit)
+        SR, BPS = self.sample_rate, 2  # Sample Rate and Bytes Per Sample (16-bit)
         start = time.time()
         self._quick_prev_chunk_time: float = 0.0  # Track time of previous chunk
 
@@ -365,7 +372,12 @@ class AudioProcessor:
             stop_event = self.stop_event
 
         # Determine if we're using queue mode or direct playback
-        use_queue = audio_chunks is not None
+        # EdgeTTS DOIT utiliser direct playback (MP3/Opus, pas PCM)
+        if self.uses_direct_playback:
+            use_queue = False
+            logger.debug(f"{generation_string} Using direct playback for {self.engine_name} (generates MP3/Opus)")
+        else:
+            use_queue = audio_chunks is not None
 
         # Feed the generator to the stream
         self.stream.feed(generator)
@@ -376,7 +388,7 @@ class AudioProcessor:
         good_streak: int = 0
         buffering: bool = True
         buf_dur: float = 0.0
-        SR, BPS = 24000, 2  # Assumed Sample Rate and Bytes Per Sample
+        SR, BPS = self.sample_rate, 2  # Sample Rate and Bytes Per Sample
         start = time.time()
         self._final_prev_chunk_time: float = 0.0  # Separate timer for generator synthesis
 
