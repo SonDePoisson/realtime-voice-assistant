@@ -1,5 +1,4 @@
 import logging
-
 import threading
 import queue
 import time
@@ -19,34 +18,28 @@ class Generation:
         self.user_text = user_text
         self.assistant_text = ""
         self.text_queue = queue.Queue()  # Queue pour streaming LLM → TTS
-        self.audio_queue = queue.Queue()  # Queue pour streaming TTS → Player
         self.llm_completed = False
         self.tts_started = False
         self.tts_completed = False
-        self.audio_started = False
-        self.audio_completed = False
         self.timestamp = time.time()
 
 
 class ConversationManager:
     """
     Orchestre la conversation en temps réel avec 3 composants principaux:
-    - STT (Speech-to-Text) avec Whisper small
-    - LLM (Large Language Model) avec Ollama llama3.2:3b
-    - TTS (Text-to-Speech) avec Kokoro voix française
+    - STT (Speech-to-Text) avec Whisper
+    - LLM (Large Language Model) avec Ollama
+    - TTS (Text-to-Speech) avec EdgeTTS
 
     Architecture simplifiée à 2 worker threads:
     - Thread LLM: génère les réponses en streaming
-    - Thread TTS: synthétise et joue l'audio
+    - Thread TTS: synthétise et joue l'audio directement via MPV
     """
 
     def __init__(
         self,
         llm_provider: str = "ollama",
         llm_model: str = "llama3.2:3b",
-        # llm_model: str = "ministral-3:latest",
-        tts_engine: str = "kokoro",
-        language: str = "fr",
         system_prompt_file: str = "system_prompt.txt",
     ):
         """
@@ -55,7 +48,6 @@ class ConversationManager:
         Args:
             llm_provider: provider LLM ("ollama")
             llm_model: Nom du modèle LLM
-            tts_engine: Moteur TTS ("kokoro", "edge_tts")
             system_prompt_file: Chemin vers le fichier de prompt système
         """
         logger.debug("-- [Init] ConversationManager")
@@ -73,21 +65,19 @@ class ConversationManager:
         )
 
         logger.debug("-- [Init] TTS")
-        self.tts = AudioProcessor(engine=tts_engine, language=language)
+        self.tts = AudioProcessor()
 
         logger.debug("-- [Init] STT")
-        self.stt = TranscriptionProcessor(source_language=language)
+        self.stt = TranscriptionProcessor()
 
         # Connecter les callbacks STT
         self.stt.full_transcription_callback = self._on_user_input
         self.stt.on_recording_start_callback = self._on_user_interrupt
         self.stt.silence_active_callback = self._on_silence_state_changed
 
-        # TODO : VERIFY TURN DETECTION
-        # Turn detection #
+        # Turn detection
         if USE_TURN_DETECTION:
             logger.debug("Turn detection activé")
-            # Le turn detection est déjà géré dans TranscriptionProcessor
 
         # État de la conversation
         self.current_generation: Optional[Generation] = None
@@ -101,7 +91,6 @@ class ConversationManager:
         # Worker threads
         self.llm_thread = None
         self.tts_thread = None
-        self.audio_player_thread = None
 
         logger.debug("-- [Init] -- DONE")
 
@@ -124,9 +113,6 @@ class ConversationManager:
 
         self.tts_thread = threading.Thread(target=self._tts_worker, name="TTS-Worker", daemon=True)
         self.tts_thread.start()
-
-        self.audio_player_thread = threading.Thread(target=self._audio_player_worker, name="Audio-Player", daemon=True)
-        self.audio_player_thread.start()
 
     def _on_user_input(self, text: str):
         """
@@ -167,8 +153,7 @@ class ConversationManager:
         """
         if not silence_active:
             # L'utilisateur vient de commencer à parler
-            # Interrompre la génération en cours si elle existe
-            if self.current_generation and not self.current_generation.audio_completed:
+            if self.current_generation and not self.current_generation.tts_completed:
                 logger.debug("-- [INTERRUPTION] User started speaking, aborting current generation")
                 self._abort_current()
 
@@ -233,7 +218,7 @@ class ConversationManager:
         Thread worker: synthétise l'audio à partir des chunks de texte.
 
         Attend que des chunks de texte soient disponibles dans text_queue,
-        puis les synthétise en audio et les place dans audio_queue.
+        puis les synthétise en audio et les joue directement via MPV.
         """
         logger.debug("-- [START] TTS")
 
@@ -268,133 +253,20 @@ class ConversationManager:
                         continue
 
             try:
-                # EdgeTTS joue directement via MPV (MP3/Opus), pas via queue+PyAudio
-                # Les autres engines (Kokoro) utilisent la queue audio
-                if self.tts.uses_direct_playback:
-                    # Direct playback: pas de queue audio
-                    completed = self.tts.synthesize_generator(
-                        text_chunks(),
-                        audio_chunks=None,  # Pas de queue, lecture directe
-                        stop_event=self.abort_event,
-                    )
-                    # Pas besoin de signaler l'audio_player car il ne sera pas utilisé
-                else:
-                    # Queue audio: Synthétiser dans la queue pour PyAudio
-                    completed = self.tts.synthesize_generator(
-                        text_chunks(),
-                        audio_chunks=gen.audio_queue,  # Mettre l'audio dans la queue
-                        stop_event=self.abort_event,
-                    )
+                # Synthétiser et jouer directement via MPV (pas de queue audio)
+                completed = self.tts.synthesize_generator(
+                    text_chunks(),
+                    stop_event=self.abort_event,
+                )
 
                 if completed and not self.abort_event.is_set():
                     gen.tts_completed = True
-                    if not self.tts.uses_direct_playback:
-                        gen.audio_queue.put(None)  # Signal de fin pour l'audio player
-                    else:
-                        # Direct playback: audio déjà joué, marquer comme terminé
-                        gen.audio_started = True
-                        gen.audio_completed = True
                     logger.debug("-- [DONE] TTS")
                 else:
-                    if not self.tts.uses_direct_playback:
-                        gen.audio_queue.put(None)  # Signal de fin même si interrompu
-                    else:
-                        # Direct playback: audio interrompu
-                        gen.audio_started = True
-                        gen.audio_completed = False
                     logger.debug("-- [STOP] TTS")
 
             except Exception as e:
                 logger.error(f"-- [ERROR] TTS: {e}", exc_info=True)
-                if not self.tts.uses_direct_playback:
-                    gen.audio_queue.put(None)  # Signal de fin en cas d'erreur
-
-    def _audio_player_worker(self):
-        """
-        Thread worker: joue l'audio depuis la queue audio.
-
-        Attend que des chunks audio soient disponibles dans audio_queue,
-        puis les joue sur les haut-parleurs via pyaudio.
-
-        Note: Si EdgeTTS est utilisé (direct playback), ce worker ne fait rien
-        car l'audio est joué directement par RealtimeTTS via MPV.
-        """
-        import pyaudio
-
-        logger.debug("-- [START] Audio")
-
-        # Si EdgeTTS (direct playback), ce worker n'est pas nécessaire
-        if self.tts.uses_direct_playback:
-            logger.debug("-- [SKIP] Audio player (using direct playback via MPV)")
-            while not self.shutdown_event.is_set():
-                time.sleep(0.1)
-            logger.debug("-- [SHUTDOWN] Audio Player (was idle)")
-            return
-
-        # Initialiser PyAudio une seule fois (réutilisé pour toutes les générations)
-        p = pyaudio.PyAudio()
-
-        try:
-            while not self.shutdown_event.is_set():
-                time.sleep(0.01)
-
-                gen = self.current_generation
-                if not gen or gen.audio_started:
-                    continue
-
-                # Attendre qu'au moins quelques chunks audio soient disponibles (buffer)
-                if gen.audio_queue.qsize() < 5 and not gen.tts_completed:
-                    continue
-
-                gen.audio_started = True
-
-                # Ouvrir un nouveau stream pour cette génération
-                stream = None
-                try:
-                    stream = p.open(
-                        format=pyaudio.paInt16,
-                        channels=1,
-                        rate=self.tts.sample_rate,  # Utiliser le sample rate de l'engine TTS
-                        output=True,
-                        frames_per_buffer=4096,
-                    )
-
-                    # Lire et jouer les chunks audio
-                    while not self.abort_event.is_set():
-                        try:
-                            chunk = gen.audio_queue.get(timeout=0.1)
-                            if chunk is None:  # Signal de fin
-                                break
-                            # Vérifier l'interruption avant d'écrire le chunk
-                            if self.abort_event.is_set():
-                                logger.debug("-- [INTERRUPTION] Stopping audio playback immediately")
-                                break
-                            stream.write(chunk)
-                        except queue.Empty:
-                            if gen.tts_completed:
-                                break
-                            continue
-
-                    if not self.abort_event.is_set():
-                        gen.audio_completed = True
-                        logger.debug("-- [DONE] Audio")
-                    else:
-                        logger.debug("-- [STOP] Audio")
-
-                except Exception as e:
-                    logger.error(f"Erreur lors de la lecture audio: {e}", exc_info=True)
-
-                finally:
-                    # Fermer le stream proprement après chaque génération
-                    if stream:
-                        stream.stop_stream()
-                        stream.close()
-                        logger.debug("Stream audio fermé")
-
-        finally:
-            # Cleanup PyAudio
-            p.terminate()
-            logger.debug("-- [SHUTDOWN] Audio Player")
 
     def _abort_current(self):
         """Interrompt la génération en cours"""
@@ -417,16 +289,10 @@ class ConversationManager:
         except Exception as e:
             logger.error(f"Erreur lors de l'arrêt TTS: {e}")
 
-        # Vider les queues de texte et audio
+        # Vider la queue de texte
         while not self.current_generation.text_queue.empty():
             try:
                 self.current_generation.text_queue.get_nowait()
-            except queue.Empty:
-                break
-
-        while not self.current_generation.audio_queue.empty():
-            try:
-                self.current_generation.audio_queue.get_nowait()
             except queue.Empty:
                 break
 
@@ -472,5 +338,3 @@ class ConversationManager:
             self.llm_thread.join(timeout=2.0)
         if self.tts_thread:
             self.tts_thread.join(timeout=2.0)
-        if self.audio_player_thread:
-            self.audio_player_thread.join(timeout=2.0)

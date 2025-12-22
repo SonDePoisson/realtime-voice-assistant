@@ -25,9 +25,7 @@ from logsetup import setup_logging
 
 LLM_PROVIDER = "ollama"
 LLM_MODEL = "ministral-3"  # ministral-3:latest # llama3.2:3b
-TTS_MODEL = "edge_tts"  # kokoro # edge_ts
 STT_MODEL = "small"  # Configure in stt_module
-LANGUAGE = "fr"
 
 # Désactiver les warnings pour un affichage plus propre
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Éviter les deadlocks avec HuggingFace tokenizers
@@ -101,8 +99,6 @@ def main():
         manager = ConversationManager(
             llm_provider=LLM_PROVIDER,
             llm_model=LLM_MODEL,
-            tts_engine=TTS_MODEL,
-            language=LANGUAGE,
             system_prompt_file="system_prompt.txt",
         )
 
