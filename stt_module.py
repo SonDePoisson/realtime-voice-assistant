@@ -348,45 +348,6 @@ class TranscriptionProcessor:
         else:
             logger.error("Cannot set final callback: Recorder not initialized.")
 
-    def abort_generation(self) -> None:
-        """
-        Clears the cache of potentially yielded sentences.
-
-        This effectively stops any further actions that might be triggered based
-        on previously detected potential sentence ends, useful if processing needs
-        to be reset or interrupted externally.
-        """
-        self.potential_sentences_yielded.clear()
-        logger.debug("️ Potential sentence yield cache cleared (generation aborted).")
-
-    def perform_final(self) -> None:
-        """
-        Manually triggers the final transcription process using the last known
-        real-time text.
-
-        This bypasses the recorder's natural end-of-speech detection and immediately
-        invokes the final transcription callback with the `self.realtime_text` content.
-        Useful for scenarios where transcription needs to be finalized externally.
-        """
-        if self.recorder:  # Check if recorder exists, primarily as a gatekeeper
-            if self.realtime_text is None:
-                logger.warning("Forcing final transcription, but realtime_text is None. Using empty string.")
-                current_text = ""
-            else:
-                current_text = self.realtime_text
-
-            self.final_transcription = current_text  # Update internal state
-            logger.info(f"-> User: {current_text}")
-            self.sentence_end_cache.clear()
-            self.potential_sentences_yielded.clear()
-
-            if USE_TURN_DETECTION and hasattr(self, "turn_detection"):
-                self.turn_detection.reset()
-            if self.full_transcription_callback:
-                self.full_transcription_callback(current_text)
-        else:
-            logger.warning("️ Cannot perform final: Recorder not initialized.")
-
     def _normalize_text(self, text: str) -> str:
         """
         Internal helper to normalize text for comparison purposes.

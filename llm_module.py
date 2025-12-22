@@ -12,30 +12,13 @@ from threading import Lock
 # --- Library Dependencies ---
 try:
     import requests
-    from requests import Session  # Explicit import
 
     REQUESTS_AVAILABLE = True
 except ImportError:
     REQUESTS_AVAILABLE = False
     logging.warning("️ requests library not installed. Ollama provider (direct HTTP) will not function.")
-    if sys.version_info >= (3, 9):
-        Session = Any | None
-    else:
-        Session = Optional[Any]
 
-# Configure logging
-# Use the root logger configured by the main application if available, else basic config
-log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
-log_level = getattr(logging, log_level_str, logging.INFO)
-# Check if root logger already has handlers (likely configured by main app)
-if not logging.getLogger().handlers:
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        stream=sys.stdout,
-    )  # Default to stdout if not configured
 logger = logging.getLogger(__name__)  # Get logger for this module
-logger.setLevel(log_level)  # Ensure module logger respects level
 
 # --- Environment Variable Configuration ---
 try:
@@ -55,7 +38,7 @@ except ImportError:
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 
 
-def _check_ollama_connection(base_url: str, session: Optional[Session]) -> bool:
+def _check_ollama_connection(base_url: str, session: Optional["requests.Session"]) -> bool:
     """
     Performs a quick HTTP GET request to check connectivity with an Ollama server.
 
@@ -188,8 +171,7 @@ class LLM:
         self._base_url = base_url
         self.no_think = no_think  # Not used yet, but kept for future use
 
-        # self.client: Optional[OpenAI] = None
-        self.ollama_session: Optional[Session] = None
+        self.ollama_session: Optional["requests.Session"] = None
         self._client_initialized: bool = False
         self._client_init_lock = Lock()
         self._active_requests: Dict[str, Dict[str, Any]] = {}
@@ -890,133 +872,6 @@ class LLM:
                         exc_info=False,
                     )
 
-    def measure_inference_time(self, num_tokens: int = 10, **kwargs: Any) -> Optional[float]:
-        """
-        Measures the time taken to generate a target number of initial tokens.
-
-        Uses a fixed, predefined prompt designed to elicit a somewhat predictable
-        response length. Times the generation process from the moment the generator
-        is obtained until the target number of tokens is yielded or generation ends.
-        Ensures the provider client is initialized first.
-
-        Args:
-            num_tokens: The target number of tokens to generate before stopping measurement.
-            **kwargs: Additional keyword arguments passed to the `generate` method
-                      (e.g., temperature=0.1).
-
-        Returns:
-            The time taken in milliseconds to generate the actual number of tokens
-            produced (up to `num_tokens`), or None if generation failed, produced 0 tokens,
-            or encountered an error during initialization or generation.
-        """
-        if num_tokens <= 0:
-            logger.warning("️ Cannot measure inference time for 0 or negative tokens.")
-            return None
-
-        # Ensure client is ready (handles lazy init + connection checks + ps fallback)
-        if not self._lazy_initialize_clients():
-            logger.error(f"️ Measurement failed: Could not initialize provider client/connection for {self.provider}.")
-            return None
-
-        # --- Define specific prompts for measurement ---
-        measurement_system_prompt = "You are a precise assistant. Follow instructions exactly."
-        # This text is designed to likely produce > 10 tokens across different tokenizers.
-        measurement_user_prompt = "Repeat the following sequence exactly, word for word: one two three four five six seven eight nine ten eleven twelve"
-        measurement_history = [
-            {"role": "system", "content": measurement_system_prompt},
-            {"role": "user", "content": measurement_user_prompt},
-        ]
-        # ---------------------------------------------
-
-        req_id = f"measure-{self.provider}-{uuid.uuid4()}"
-        logger.debug(
-            f"️ Measuring inference time for {num_tokens} tokens (Request ID: {req_id}). Using fixed measurement prompt."
-        )
-        logger.debug(f"️ [{req_id}] Measurement history: {measurement_history}")
-
-        token_count = 0
-        start_time = None
-        end_time = None
-        generator = None
-        actual_tokens_generated = 0
-
-        try:
-            # Pass the constructed history and ensure use_system_prompt is False
-            # The 'text' argument to generate is ignored when history is provided containing the user message.
-            generator = self.generate(
-                text="",  # Text is ignored as history provides the user message
-                history=measurement_history,
-                use_system_prompt=False,  # Explicitly disable default system prompt
-                request_id=req_id,
-                **kwargs,  # Pass any extra args like temperature
-            )
-
-            # Iterate and time
-            start_time = time.time()  # Start timing *after* generate() call returns generator
-            for token in generator:
-                if token_count == 0:
-                    # Could capture TTFT here if needed: time.time() - start_time
-                    pass
-                token_count += 1
-                # logger.debug(f"[{req_id}] Token {token_count}: '{token}'") # Optional: very verbose
-                if token_count >= num_tokens:
-                    end_time = time.time()
-                    logger.debug(f"️ [{req_id}] Reached target {num_tokens} tokens.")
-                    break  # Stop iterating
-
-            # If loop finished without breaking, record end time here
-            if end_time is None:
-                end_time = time.time()
-                logger.debug(
-                    f"️ [{req_id}] Generation finished naturally after {token_count} tokens (may be less than requested {num_tokens})."
-                )
-
-            actual_tokens_generated = token_count
-
-        except (ConnectionError, RuntimeError, Exception) as e:
-            logger.error(
-                f"️ Error during inference time measurement ({req_id}): {e}",
-                exc_info=False,
-            )
-            # Let finally block handle potential generator cleanup
-            return None  # Indicate failure
-        finally:
-            # Ensure generator resources are released if the loop was broken early
-            # The generate() method's finally block handles request tracking removal AND attempts close.
-            # We still explicitly try closing the generator here as a fallback.
-            if generator and hasattr(generator, "close"):
-                try:
-                    logger.debug(f"️️ [{req_id}] Closing generator in measure_inference_time finally.")
-                    generator.close()
-                except Exception as close_err:
-                    # Log but don't prevent returning time if measured
-                    logger.warning(
-                        f"️️ [{req_id}] Error closing generator in finally: {close_err}",
-                        exc_info=False,
-                    )
-            generator = None  # Clear reference
-
-        # --- Calculate and Return Result ---
-        if start_time is None or end_time is None:
-            logger.error(f"️ [{req_id}] Measurement failed: Start or end time not recorded.")
-            return None
-
-        if actual_tokens_generated == 0:
-            logger.warning(f"️️ [{req_id}] Measurement invalid: 0 tokens were generated.")
-            return None
-
-        duration_sec = end_time - start_time
-        duration_ms = duration_sec * 1000
-
-        logger.debug(
-            f"️ Measured ~{duration_ms:.2f} ms for {actual_tokens_generated} tokens "
-            f"(target: {num_tokens}) for model '{self.model}' on provider '{self.provider}' using fixed prompt. (Request ID: {req_id})"
-        )
-
-        # Return the time taken for the actual tokens generated.
-        return duration_ms
-
-
 # --- Context Manager ---
 class LLMGenerationContext:
     """
@@ -1164,14 +1019,6 @@ if __name__ == "__main__":
 
             if prewarm_success:
                 main_logger.debug("Ollama Prewarm/Initialization OK.")
-
-                # --- Run Measurement ---
-                main_logger.debug("️ --- Running Ollama Inference Time Measurement ---")
-                inf_time = ollama_llm.measure_inference_time(num_tokens=10, temperature=0.1)
-                if inf_time is not None:
-                    main_logger.debug(f"️ --- Measured Inference Time: {inf_time:.2f} ms ---")
-                else:
-                    main_logger.warning("️️ --- Inference Time Measurement Failed ---")
 
                 # --- Run Generation ---
                 main_logger.debug("▶️ --- Running Ollama Generation via Context (Post-Prewarm) ---")

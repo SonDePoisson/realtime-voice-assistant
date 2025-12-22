@@ -86,9 +86,7 @@ class TextSimilarity:
         """
         if not isinstance(text, str):
             # Handle potential non-string inputs gracefully
-            logger.warning(
-                f"Input is not a string: {type(text)}. Converting to empty string."
-            )
+            logger.warning(f"Input is not a string: {type(text)}. Converting to empty string.")
             text = ""
         text = text.lower()
         text = self._punctuation_regex.sub("", text)
@@ -174,16 +172,12 @@ class TextSimilarity:
             sim_end = matcher.ratio()
 
             # Calculate weighted average
-            weighted_sim = (
-                1 - self.end_weight
-            ) * sim_overall + self.end_weight * sim_end
+            weighted_sim = (1 - self.end_weight) * sim_overall + self.end_weight * sim_end
             return weighted_sim
 
         else:
             # This should not happen due to __init__ validation, but as a safeguard:
-            logger.error(
-                f"Invalid focus mode encountered during calculation: {self.focus}"
-            )
+            logger.error(f"Invalid focus mode encountered during calculation: {self.focus}")
             raise RuntimeError("Invalid focus mode encountered during calculation.")
 
     def are_texts_similar(self, text1: str, text2: str) -> bool:
@@ -223,9 +217,7 @@ if __name__ == "__main__":
 
     print("--- Standard Similarity (Overall Focus) ---")
     sim_overall = TextSimilarity(focus="overall")
-    print(
-        f"Long Same: {sim_overall.calculate_similarity(text_long1, text_long2):.4f}"
-    )  # Expected: 1.0000
+    print(f"Long Same: {sim_overall.calculate_similarity(text_long1, text_long2):.4f}")  # Expected: 1.0000
     print(
         f"Long Diff End: {sim_overall.calculate_similarity(text_long1, text_long_diff_end):.4f}"
     )  # Expected: High (e.g., > 0.9)
@@ -238,18 +230,14 @@ if __name__ == "__main__":
     print(
         f"Empty vs Punct: {sim_overall.calculate_similarity(text_empty, text_punct):.4f}"
     )  # Expected: 1.0000 (both normalize to "")
-    print(
-        f"Short vs Empty: {sim_overall.calculate_similarity(text_short1, text_empty):.4f}"
-    )  # Expected: 0.0000
+    print(f"Short vs Empty: {sim_overall.calculate_similarity(text_short1, text_empty):.4f}")  # Expected: 0.0000
     print(
         f"Non-string vs Empty: {sim_overall.calculate_similarity(text_non_string, text_empty):.4f}"
     )  # Expected: 1.0000 (both normalize to "")
 
     print("\n--- End Focus (Last 5 words) ---")
     sim_end_only = TextSimilarity(focus="end", n_words=5)
-    print(
-        f"Long Same: {sim_end_only.calculate_similarity(text_long1, text_long2):.4f}"
-    )  # Expected: 1.0000
+    print(f"Long Same: {sim_end_only.calculate_similarity(text_long1, text_long2):.4f}")  # Expected: 1.0000
     print(
         f"Long Diff End: {sim_end_only.calculate_similarity(text_long1, text_long_diff_end):.4f}"
     )  # Expected: Lower (depends on last 5 words)
@@ -262,15 +250,11 @@ if __name__ == "__main__":
     print(
         f"Empty vs Punct: {sim_end_only.calculate_similarity(text_empty, text_punct):.4f}"
     )  # Expected: 1.0000 (both normalize to "")
-    print(
-        f"Short vs Empty: {sim_end_only.calculate_similarity(text_short1, text_empty):.4f}"
-    )  # Expected: 0.0000
+    print(f"Short vs Empty: {sim_end_only.calculate_similarity(text_short1, text_empty):.4f}")  # Expected: 0.0000
 
     print("\n--- Weighted Focus (70% End, Last 5 words) ---")
     sim_weighted = TextSimilarity(focus="weighted", n_words=5, end_weight=0.7)
-    print(
-        f"Long Same: {sim_weighted.calculate_similarity(text_long1, text_long2):.4f}"
-    )  # Expected: 1.0000
+    print(f"Long Same: {sim_weighted.calculate_similarity(text_long1, text_long2):.4f}")  # Expected: 1.0000
     print(
         f"Long Diff End: {sim_weighted.calculate_similarity(text_long1, text_long_diff_end):.4f}"
     )  # Expected: Lower than overall, higher than end-only
@@ -283,9 +267,7 @@ if __name__ == "__main__":
     print(
         f"Empty vs Punct: {sim_weighted.calculate_similarity(text_empty, text_punct):.4f}"
     )  # Expected: 1.0000 (both normalize to "")
-    print(
-        f"Short vs Empty: {sim_weighted.calculate_similarity(text_short1, text_empty):.4f}"
-    )  # Expected: 0.0000
+    print(f"Short vs Empty: {sim_weighted.calculate_similarity(text_short1, text_empty):.4f}")  # Expected: 0.0000
 
     print("\n--- Handling Short Texts with End Focus (n_words=5) ---")
     short1 = "one two three"

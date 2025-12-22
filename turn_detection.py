@@ -1,7 +1,5 @@
 import logging
 
-logger = logging.getLogger(__name__)
-
 import transformers
 import collections
 import threading
@@ -9,6 +7,8 @@ import queue
 import torch
 import time
 import re
+
+logger = logging.getLogger(__name__)
 
 # Configuration constants
 model_dir_local = "KoljaB/SentenceFinishedClassification"
