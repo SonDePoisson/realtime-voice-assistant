@@ -5,15 +5,16 @@ description = "Assistant vocal en temps réel avec Whisper, EdgeTTS et Ollama"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "realtimestt==0.3.104",
-    "realtimetts[kokoro,edge]>=0.5.5",
-    "requests>=2.32.5",
+    "realtimestt>=0.3.0",
+    "realtimetts[edge]>=0.5.5",
+    "requests>=2.32.0",
     "transformers>=4.30.0",
     "torch>=2.0.0",
     "numpy>=1.24.0",
     "scipy>=1.10.0",
-    "nltk>=3.8.0",
-    "sentence-transformers>=2.2.0",
-    "pip>=25.3",
-    "dotenv>=0.9.9",
+    "huggingface-hub>=0.20.0",
+    "python-dotenv>=1.0.0",
 ]
+
+[tool.uv]
+dev-dependencies = []

@@ -11,8 +11,8 @@ import re
 logger = logging.getLogger(__name__)
 
 # Configuration constants
-model_dir_local = "KoljaB/SentenceFinishedClassification"
-model_dir_cloud = "/root/models/sentenceclassification/"
+# Use model ID format for Hugging Face Hub (not full URL)
+MODEL = "KoljaB/SentenceFinishedClassification"
 sentence_end_marks = [".", "!", "?", "。"]  # Characters considered sentence endings
 
 # Anchor points for probability-to-pause interpolation
@@ -90,9 +90,7 @@ def strip_ending_punctuation(text: str) -> str:
     return text  # Return the stripped text
 
 
-def find_matching_texts(
-    texts_without_punctuation: collections.deque,
-) -> list[tuple[str, str]]:
+def find_matching_texts(texts_without_punctuation: collections.deque) -> list[tuple[str, str]]:
     """
     Finds recent consecutive entries with the same stripped text.
 
@@ -171,7 +169,7 @@ def interpolate_detection(prob: float) -> float:
             return v1 + ratio * (v2 - v1)
 
     # Fallback: Should not be reached if anchor_points cover [0,1] properly.
-    logger.warning(f"️ Probability {p} fell outside defined anchor points {anchor_points}. Returning fallback value.")
+    logger.warning(f"🎤⚠️ Probability {p} fell outside defined anchor points {anchor_points}. Returning fallback value.")
     return 4.0
 
 
@@ -189,7 +187,6 @@ class TurnDetection:
     def __init__(
         self,
         on_new_waiting_time: callable,
-        local: bool = False,
         pipeline_latency: float = 0.5,
         pipeline_latency_overhead: float = 0.1,
     ) -> None:
@@ -206,7 +203,7 @@ class TurnDetection:
             pipeline_latency: Estimated base latency of the STT/processing pipeline in seconds.
             pipeline_latency_overhead: Additional buffer added to the pipeline latency.
         """
-        model_dir = model_dir_local if local else model_dir_cloud
+        model_dir = MODEL
 
         self.on_new_waiting_time = on_new_waiting_time
 
@@ -222,8 +219,8 @@ class TurnDetection:
         )
         self.text_worker.start()
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        logger.debug(f"Using device: {self.device}")
+        self.device = torch.device("mps")
+        logger.info(f"🎤🔌 Using device: {self.device}")
         self.tokenizer = transformers.DistilBertTokenizerFast.from_pretrained(model_dir)
         self.classification_model = transformers.DistilBertForSequenceClassification.from_pretrained(model_dir)
         self.classification_model.to(self.device)
@@ -237,19 +234,15 @@ class TurnDetection:
         self._completion_probability_cache_max_size: int = 256  # Max size for the LRU cache
 
         # Warmup the classification model for faster initial predictions
-        logger.debug("Warming up the classification model...")
+        logger.info("🎤🔥 Warming up the classification model...")
         with torch.no_grad():
             warmup_text = "This is a warmup sentence."
             inputs = self.tokenizer(
-                warmup_text,
-                return_tensors="pt",
-                truncation=True,
-                padding="max_length",
-                max_length=self.max_length,
+                warmup_text, return_tensors="pt", truncation=True, padding="max_length", max_length=self.max_length
             )
             inputs = {key: value.to(self.device) for key, value in inputs.items()}
             _ = self.classification_model(**inputs)  # Run one prediction
-        logger.debug("Classification model warmed up.")
+        logger.info("🎤✅ Classification model warmed up.")
 
         # Default dynamic pause settings (initialized for speed_factor=0.0)
         self.detection_speed: float = 0.5
@@ -314,7 +307,7 @@ class TurnDetection:
         self.unknown_sentence_detection_pause = fast["unknown_sentence_detection_pause"] + speed_factor * (
             very_slow["unknown_sentence_detection_pause"] - fast["unknown_sentence_detection_pause"]
         )
-        logger.debug(f"️ Updated turn detection settings with speed_factor={speed_factor:.2f}")
+        logger.info(f"🎤⚙️ Updated turn detection settings with speed_factor={speed_factor:.2f}")
 
     def suggest_time(
         self,
@@ -363,11 +356,7 @@ class TurnDetection:
         import torch.nn.functional as F
 
         inputs = self.tokenizer(
-            sentence,
-            return_tensors="pt",
-            truncation=True,
-            padding="max_length",
-            max_length=self.max_length,
+            sentence, return_tensors="pt", truncation=True, padding="max_length", max_length=self.max_length
         )
         # Move input tensors to the correct device (CPU or GPU)
         inputs = {key: value.to(self.device) for key, value in inputs.items()}
@@ -445,7 +434,7 @@ class TurnDetection:
                 continue
 
             # --- Processing starts when text is received ---
-            logger.debug(f'️ Starting pause calculation for: "{text}"')
+            logger.info(f'🎤⚙️ Starting pause calculation for: "{text}"')
 
             processed_text = preprocess_text(text)  # Apply initial cleaning
 
@@ -504,15 +493,15 @@ class TurnDetection:
             if contains_ellipses:
                 final_pause += 0.2
 
-            logger.debug(
-                f' Calculated pauses: Punct={whisper_suggested_pause:.2f}, Model={sentence_finished_model_pause:.2f}, Weighted={weighted_pause:.2f}, Final={final_pause:.2f} for "{processed_text}" (Prob={prob_complete:.2f})'
+            logger.info(
+                f'🎤📊 Calculated pauses: Punct={whisper_suggested_pause:.2f}, Model={sentence_finished_model_pause:.2f}, Weighted={weighted_pause:.2f}, Final={final_pause:.2f} for "{processed_text}" (Prob={prob_complete:.2f})'
             )
 
             # Ensure final pause is not less than the pipeline latency overhead
             min_pause = self.pipeline_latency + self.pipeline_latency_overhead
             if final_pause < min_pause:
-                logger.debug(
-                    f"️ Final pause ({final_pause:.2f}s) is less than minimum ({min_pause:.2f}s). Using minimum."
+                logger.info(
+                    f"🎤⚠️ Final pause ({final_pause:.2f}s) is less than minimum ({min_pause:.2f}s). Using minimum."
                 )
                 final_pause = min_pause
 
@@ -532,7 +521,7 @@ class TurnDetection:
         Args:
             text: The text segment (e.g., from STT) to be processed.
         """
-        logger.debug(f' Queuing text for pause calculation: "{text}"')
+        logger.info(f'🎤📥 Queuing text for pause calculation: "{text}"')
         self.text_queue.put(text)
 
     def reset(self) -> None:
@@ -543,7 +532,7 @@ class TurnDetection:
         current waiting time tracker. Useful for starting a new conversation or
         interaction context.
         """
-        logger.debug("Resetting TurnDetection state.")
+        logger.info("🎤🔄 Resetting TurnDetection state.")
         # Clear the history deques
         self.text_time_deque.clear()
         self.texts_without_punctuation.clear()
