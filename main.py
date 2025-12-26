@@ -1,373 +1,308 @@
-#!/usr/bin/env python3
-"""
-Voice-enabled conversational agent using SpeechPipelineManager and TranscriptionProcessor.
-
-This script provides both voice and text interfaces for interacting with an LLM.
-"""
-
+# main_bis.py - Version Terminal (sans web/WebSocket)
 import logging
 import signal
-import sys
-import time
 import threading
+import time
+import asyncio
 
 from logsetup import setup_logging
-from speech_pipeline_manager import SpeechPipelineManager
-from transcribe import TranscriptionProcessor
-from colors import Colors
 
-# Setup logging
-setup_logging(level=logging.INFO)
+setup_logging(logging.INFO)
 logger = logging.getLogger(__name__)
 
+logger.info("🖥️👋 Démarrage de l'assistant vocal en mode terminal")
 
-class VoiceAgent:
-    """
-    A voice-enabled conversational agent that uses:
-    - TranscriptionProcessor for STT (Speech-to-Text)
-    - SpeechPipelineManager for LLM inference and TTS synthesis
-    """
+import pyaudio
+from colors import Colors
+from speech_pipeline_manager import SpeechPipelineManager
+from audio_in import AudioInputProcessor
 
-    def __init__(
-        self,
-        tts_engine: str = "edgeTTS",
-        llm_provider: str = "ollama",
-        llm_model: str = "ministral-3",
-        language: str = "fr",
-    ):
-        """
-        Initialize the voice agent.
+# --------------------------------------------------------------------
+# Configuration
+# --------------------------------------------------------------------
+TTS_START_ENGINE = "edgeTTS"
+LLM_START_PROVIDER = "ollama"
+LLM_START_MODEL = "ministral-3"
+LANGUAGE = "fr"
 
-        Args:
-            tts_engine: TTS engine to use (default: "edgeTTS")
-            llm_provider: LLM provider (default: "ollama")
-            llm_model: LLM model name (default: "ministral-3")
-            language: Language for STT (default: "fr")
-        """
+# Configuration PyAudio
+SAMPLE_RATE = 48000  # AudioInputProcessor attend 48kHz (resample vers 16kHz)
+CHUNK_SIZE = 1024
+CHANNELS = 1
+FORMAT = pyaudio.paInt16
+
+
+# --------------------------------------------------------------------
+# Callbacks pour le terminal
+# --------------------------------------------------------------------
+class TerminalCallbacks:
+    """Gère les callbacks de transcription pour le mode terminal."""
+
+    def __init__(self, pipeline: SpeechPipelineManager, audio_processor: AudioInputProcessor):
+        self.pipeline = pipeline
+        self.audio_processor = audio_processor
+        self.final_transcription = ""
+        self.partial_transcription = ""
+        self.user_finished_turn = False
+        self.tts_playing = False
+        self.interruption_time = 0.0
+
+    def on_partial(self, txt: str):
+        """Callback pour les transcriptions partielles."""
+        self.partial_transcription = txt
+        print(f"\r{Colors.CYAN}[Vous]: {txt}{Colors.RESET}".ljust(80), end="", flush=True)
+
+    def on_potential_sentence(self, txt: str):
+        """Callback quand une phrase potentielle est détectée."""
+        logger.debug(f"🎙️ Phrase potentielle: '{txt}'")
+        self.pipeline.prepare_generation(txt)
+
+    def on_potential_final(self, txt: str):
+        """Callback quand on approche de la fin de la transcription."""
+        logger.info(f"{Colors.MAGENTA}🎙️ HOT: {txt}{Colors.RESET}")
+
+    def on_before_final(self, audio: bytes, txt: str):
+        """Callback juste avant la transcription finale."""
+        print()  # Nouvelle ligne après le partial
+        logger.info(f"{Colors.GREEN}🎙️ Fin du tour utilisateur{Colors.RESET}")
+        self.user_finished_turn = True
+
+        # Bloquer le micro pendant le TTS
+        if not self.audio_processor.interrupted:
+            logger.info(f"{Colors.CYAN}🎙️ ⏸️ Microphone interrompu (fin de tour){Colors.RESET}")
+            self.audio_processor.interrupted = True
+            self.interruption_time = time.time()
+
+        # Permettre la synthèse TTS
+        if self.pipeline.is_valid_gen():
+            self.pipeline.running_generation.tts_quick_allowed_event.set()
+
+        # Ajouter à l'historique
+        user_text = self.final_transcription if self.final_transcription else self.partial_transcription
+        if user_text:
+            logger.info(f"🎙️ Ajout à l'historique: '{user_text}'")
+            self.pipeline.history.append({"role": "user", "content": user_text})
+
+    def on_final(self, txt: str):
+        """Callback pour la transcription finale."""
+        self.final_transcription = txt
+        print(f"{Colors.GREEN}[Vous]: {txt}{Colors.RESET}")
+        self.partial_transcription = ""
+
+    def on_recording_start(self):
+        """Callback quand l'enregistrement commence."""
+        logger.info(f"{Colors.ORANGE}🎙️ Enregistrement démarré{Colors.RESET}")
+
+        # Si le TTS jouait, on interrompt
+        if self.tts_playing:
+            logger.info(f"{Colors.RED}🛑 Interruption du TTS par l'utilisateur{Colors.RESET}")
+            self.pipeline.abort_generation(reason="User interrupted")
+            self.tts_playing = False
+
+    def on_silence_active(self, is_silent: bool):
+        """Callback quand l'état de silence change."""
+        pass
+
+    def on_partial_assistant_text(self, txt: str):
+        """Callback pour le texte partiel de l'assistant."""
+        print(f"\r{Colors.YELLOW}[Assistant]: {txt}{Colors.RESET}".ljust(80), end="", flush=True)
+
+    def send_final_assistant_answer(self):
+        """Envoie la réponse finale de l'assistant."""
+        if self.pipeline.is_valid_gen():
+            answer = self.pipeline.running_generation.quick_answer + self.pipeline.running_generation.final_answer
+            if answer:
+                print(f"\n{Colors.GREEN}[Assistant]: {answer}{Colors.RESET}")
+                self.pipeline.history.append({"role": "assistant", "content": answer})
+
+
+# --------------------------------------------------------------------
+# Capture microphone avec PyAudio
+# --------------------------------------------------------------------
+class MicrophoneCapture:
+    """Capture le microphone et met les chunks dans une queue."""
+
+    def __init__(self, audio_queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+        self.audio_queue = audio_queue
+        self.loop = loop
+        self.running = False
+        self.thread = None
+        self.pyaudio = None
+        self.stream = None
+
+    def start(self):
+        """Démarre la capture du microphone."""
         self.running = True
-        self.is_listening = False
-        self.is_speaking = False
-        self.current_partial_text = ""
-        self.language = language
+        self.thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self.thread.start()
+        logger.info("🎤 Capture microphone démarrée")
 
-        logger.info(f"Initializing VoiceAgent with {llm_provider}/{llm_model}...")
+    def stop(self):
+        """Arrête la capture du microphone."""
+        self.running = False
+        if self.stream:
+            self.stream.stop_stream()
+            self.stream.close()
+        if self.pyaudio:
+            self.pyaudio.terminate()
+        logger.info("🎤 Capture microphone arrêtée")
 
-        # Initialize the speech pipeline manager (LLM + TTS)
-        self.pipeline = SpeechPipelineManager(
-            tts_engine=tts_engine,
-            llm_provider=llm_provider,
-            llm_model=llm_model,
-        )
-
-        # Get pipeline latency for STT configuration
-        pipeline_latency_ms = self.pipeline.full_output_pipeline_latency
-        pipeline_latency_s = pipeline_latency_ms / 1000.0
-
-        # Initialize STT with microphone enabled
-        self.stt = TranscriptionProcessor(
-            source_language=language,
-            realtime_transcription_callback=self._on_realtime_transcription,
-            full_transcription_callback=self._on_full_transcription,
-            on_recording_start_callback=self._on_recording_start,
-            silence_active_callback=self._on_silence_active,
-            pipeline_latency=pipeline_latency_s,
-            recorder_config={
-                "use_microphone": True,  # Enable microphone input
-                "spinner": False,
-                "model": "small",
-                "realtime_model_type": "small",
-                "language": language,
-                "silero_sensitivity": 0.05,
-                "webrtc_sensitivity": 3,
-                "post_speech_silence_duration": 0.7,
-                "min_length_of_recording": 0.5,
-                "min_gap_between_recordings": 0,
-                "enable_realtime_transcription": True,
-                "realtime_processing_pause": 0.03,
-                "silero_use_onnx": True,
-                "silero_deactivity_detection": True,
-                "beam_size": 3,
-                "beam_size_realtime": 3,
-                "no_log_file": True,
-                "debug_mode": False,
-            },
-        )
-
-        # Start the transcription loop
-        self.transcription_thread = threading.Thread(
-            target=self._run_transcription_loop,
-            name="TranscriptionLoopThread",
-            daemon=True,
-        )
-        self.transcription_thread.start()
-
-        logger.info("VoiceAgent initialized successfully.")
-
-    def _on_realtime_transcription(self, text: str) -> None:
-        """Callback for real-time (partial) transcription updates."""
-        if text != self.current_partial_text:
-            self.current_partial_text = text
-            # Clear line and show partial transcription
-            print(f"\r{Colors.YELLOW}You: {Colors.CYAN}{text}{Colors.RESET}    ", end="", flush=True)
-
-    def _on_full_transcription(self, text: str) -> None:
-        """Callback for final transcription - triggers LLM response."""
-        if not text or not text.strip():
-            return
-
-        self.current_partial_text = ""
-        self.is_listening = False
-
-        # Show final user text
-        print(f"\r{Colors.YELLOW}You: {Colors.RESET}{text}                    ")
-        logger.info(f"Full transcription received: {text}")
-
-        # Send to LLM pipeline
-        self._process_user_input(text)
-
-    def _on_recording_start(self) -> None:
-        """Callback when recording starts (voice activity detected)."""
-        self.is_listening = True
-        # If assistant is speaking, interrupt
-        if self.is_speaking:
-            logger.info("User started speaking, interrupting assistant...")
-            self.pipeline.abort_generation()
-            self.is_speaking = False
-
-    def _on_silence_active(self, is_active: bool) -> None:
-        """Callback when silence detection state changes."""
-        if is_active:
-            logger.debug("Silence detected")
-        else:
-            logger.debug("Voice activity detected")
-
-    def _run_transcription_loop(self) -> None:
-        """Run the STT transcription loop in a background thread."""
-        logger.info("Starting transcription loop...")
+    def _capture_loop(self):
+        """Boucle de capture dans un thread séparé."""
         try:
-            self.stt.transcribe_loop()
-        except Exception as e:
-            logger.error(f"Transcription loop error: {e}", exc_info=True)
+            self.pyaudio = pyaudio.PyAudio()
+            self.stream = self.pyaudio.open(
+                format=FORMAT,
+                channels=CHANNELS,
+                rate=SAMPLE_RATE,
+                input=True,
+                frames_per_buffer=CHUNK_SIZE,
+            )
 
-    def _process_user_input(self, user_input: str) -> None:
-        """Process user input and generate response."""
-        self.is_speaking = True
-
-        # Prepare generation (sends to LLM + TTS pipeline)
-        self.pipeline.prepare_generation(user_input)
-
-        # Update history
-        self.pipeline.history.append({"role": "user", "content": user_input})
-
-        # Wait for response to complete
-        response = self._wait_for_generation()
-
-        if response:
-            self.pipeline.history.append({"role": "assistant", "content": response})
-            print(f"{Colors.GREEN}Assistant: {Colors.RESET}{response}\n")
-
-        self.is_speaking = False
-
-    def _wait_for_generation(self, timeout: float = 60.0) -> str:
-        """Wait for the current generation to complete."""
-        start_time = time.time()
-        last_text = ""
-        stable_count = 0
-
-        while time.time() - start_time < timeout:
-            # Check if user started speaking (interrupt)
-            if self.is_listening:
-                logger.info("User interrupted, aborting generation...")
-                self.pipeline.abort_generation()
-                return ""
-
-            gen = self.pipeline.running_generation
-            if gen is None:
-                time.sleep(0.1)
-                continue
-
-            if gen.completed or gen.abortion_started:
-                break
-
-            if gen.llm_finished and gen.audio_quick_finished:
-                if not gen.quick_answer_provided or gen.audio_final_finished:
-                    break
-
-            current_text = gen.quick_answer + gen.final_answer
-            if current_text == last_text:
-                stable_count += 1
-                if stable_count > 20 and gen.llm_finished:
-                    break
-            else:
-                stable_count = 0
-                last_text = current_text
-
-            time.sleep(0.1)
-
-        gen = self.pipeline.running_generation
-        if gen:
-            return gen.quick_answer + gen.final_answer
-        return ""
-
-    def run(self) -> None:
-        """Run the voice agent main loop."""
-        print(f"\n{Colors.CYAN}{'=' * 60}{Colors.RESET}")
-        print(f"{Colors.BOLD}{Colors.GREEN}  Realtime Voice Assistant{Colors.RESET}")
-        print(f"{Colors.CYAN}{'=' * 60}{Colors.RESET}")
-        print(f"{Colors.GRAY}Speak into your microphone - I'm listening!")
-        print(f"Press Ctrl+C to exit.{Colors.RESET}\n")
-
-        print(f"{Colors.MAGENTA}[Listening...]{Colors.RESET}\n")
-
-        try:
             while self.running:
-                time.sleep(0.1)
-        except KeyboardInterrupt:
-            print(f"\n{Colors.GRAY}Shutting down...{Colors.RESET}")
-
-    def shutdown(self) -> None:
-        """Shutdown the agent and cleanup resources."""
-        self.running = False
-        logger.info("Shutting down VoiceAgent...")
-
-        if hasattr(self, "stt") and self.stt:
-            self.stt.shutdown()
-
-        if hasattr(self, "pipeline") and self.pipeline:
-            self.pipeline.shutdown()
-
-        logger.info("VoiceAgent shutdown complete.")
-
-
-class TextAgent:
-    """
-    A text-based conversational agent (fallback when no microphone).
-    """
-
-    def __init__(
-        self,
-        tts_engine: str = "edgeTTS",
-        llm_provider: str = "ollama",
-        llm_model: str = "ministral-3",
-    ):
-        self.running = True
-        self.pipeline = SpeechPipelineManager(
-            tts_engine=tts_engine,
-            llm_provider=llm_provider,
-            llm_model=llm_model,
-        )
-        logger.info("TextAgent initialized.")
-
-    def chat(self, user_input: str) -> str:
-        """Send a message and get response."""
-        self.pipeline.prepare_generation(user_input)
-        response = self._wait_for_generation()
-        if response:
-            self.pipeline.history.append({"role": "user", "content": user_input})
-            self.pipeline.history.append({"role": "assistant", "content": response})
-        return response
-
-    def _wait_for_generation(self, timeout: float = 60.0) -> str:
-        """Wait for generation to complete."""
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            gen = self.pipeline.running_generation
-            if gen is None:
-                time.sleep(0.1)
-                continue
-            if gen.completed or gen.abortion_started:
-                break
-            if gen.llm_finished and gen.audio_quick_finished:
-                if not gen.quick_answer_provided or gen.audio_final_finished:
+                try:
+                    data = self.stream.read(CHUNK_SIZE, exception_on_overflow=False)
+                    # Créer le dictionnaire de métadonnées comme attendu par AudioInputProcessor
+                    audio_data = {"pcm": data}
+                    # Mettre dans la queue de façon thread-safe
+                    self.loop.call_soon_threadsafe(lambda d=audio_data: self.audio_queue.put_nowait(d))
+                except Exception as e:
+                    if self.running:
+                        logger.error(f"🎤 Erreur capture: {e}")
                     break
-            time.sleep(0.1)
 
-        gen = self.pipeline.running_generation
-        return (gen.quick_answer + gen.final_answer) if gen else ""
+        except Exception as e:
+            logger.error(f"🎤 Erreur initialisation PyAudio: {e}")
+        finally:
+            if self.stream:
+                self.stream.stop_stream()
+                self.stream.close()
+            if self.pyaudio:
+                self.pyaudio.terminate()
 
-    def run(self) -> None:
-        """Run the text-based REPL loop."""
-        print(f"\n{Colors.CYAN}{'=' * 60}{Colors.RESET}")
-        print(f"{Colors.BOLD}{Colors.GREEN}  Realtime Voice Assistant - Text Mode{Colors.RESET}")
-        print(f"{Colors.CYAN}{'=' * 60}{Colors.RESET}")
-        print(f"{Colors.GRAY}Type your message and press Enter.")
-        print(f"Commands: /quit, /reset{Colors.RESET}\n")
 
-        while self.running:
-            try:
-                user_input = input(f"{Colors.YELLOW}You: {Colors.RESET}").strip()
-                if not user_input:
-                    continue
-                if user_input.lower() in ["/quit", "/exit", "/q"]:
-                    print(f"{Colors.GRAY}Goodbye!{Colors.RESET}")
-                    break
-                elif user_input.lower() == "/reset":
-                    self.pipeline.reset()
-                    print(f"{Colors.GRAY}Conversation reset.{Colors.RESET}")
-                    continue
+# --------------------------------------------------------------------
+# Fonction principale async
+# --------------------------------------------------------------------
+async def main_async(pipeline: SpeechPipelineManager):
+    """Point d'entrée principal asynchrone."""
+    # Initialiser AudioInputProcessor ICI (nécessite event loop actif)
+    audio_processor = AudioInputProcessor(language=LANGUAGE)
 
-                response = self.chat(user_input)
-                if response:
-                    print(f"{Colors.GREEN}Assistant: {Colors.RESET}{response}\n")
-                else:
-                    print(f"{Colors.RED}[No response]{Colors.RESET}\n")
+    # Créer les callbacks
+    callbacks = TerminalCallbacks(pipeline, audio_processor)
 
-            except KeyboardInterrupt:
-                print(f"\n{Colors.GRAY}Type /quit to exit.{Colors.RESET}")
-            except EOFError:
-                break
+    # Configurer les callbacks sur l'AudioInputProcessor
+    audio_processor.realtime_callback = callbacks.on_partial
+    audio_processor.transcriber.potential_sentence_end = callbacks.on_potential_sentence
+    audio_processor.transcriber.potential_full_transcription_callback = callbacks.on_potential_final
+    audio_processor.transcriber.full_transcription_callback = callbacks.on_final
+    audio_processor.transcriber.before_final_sentence = callbacks.on_before_final
+    audio_processor.recording_start_callback = callbacks.on_recording_start
+    audio_processor.silence_active_callback = callbacks.on_silence_active
 
-    def shutdown(self) -> None:
-        """Shutdown the agent."""
-        self.running = False
-        self.pipeline.shutdown()
+    # Callback pour le texte partiel de l'assistant
+    pipeline.on_partial_assistant_text = callbacks.on_partial_assistant_text
+
+    # Queue pour les chunks audio
+    audio_queue = asyncio.Queue()
+
+    # Capture microphone
+    loop = asyncio.get_event_loop()
+    mic_capture = MicrophoneCapture(audio_queue, loop)
+
+    # Gestion de l'arrêt propre
+    shutdown_event = asyncio.Event()
+
+    def signal_handler(sig, frame):
+        logger.info("\n🛑 Arrêt demandé (Ctrl+C)")
+        loop.call_soon_threadsafe(shutdown_event.set)
+
+    signal.signal(signal.SIGINT, signal_handler)
+
+    logger.info(f"{Colors.GREEN}✅ Prêt ! Parlez dans le microphone. Ctrl+C pour quitter.{Colors.RESET}")
+    print("-" * 60)
+
+    # Démarrer la capture micro
+    mic_capture.start()
+
+    # Lancer le traitement des chunks audio
+    audio_task = asyncio.create_task(audio_processor.process_chunk_queue(audio_queue))
+
+    try:
+        while not shutdown_event.is_set():
+            await asyncio.sleep(0.1)
+
+            # Reset du flag interrupted après un délai
+            if (
+                audio_processor.interrupted
+                and callbacks.interruption_time
+                and time.time() - callbacks.interruption_time > 2.0
+            ):
+                logger.info(f"{Colors.CYAN}🎙️ ▶️ Microphone réactivé{Colors.RESET}")
+                audio_processor.interrupted = False
+                callbacks.interruption_time = 0
+
+            # Vérifier si le TTS a commencé
+            if (
+                pipeline.running_generation
+                and pipeline.running_generation.quick_answer_first_chunk_ready
+                and not callbacks.tts_playing
+            ):
+                callbacks.tts_playing = True
+                logger.info(f"{Colors.BLUE}🔊 TTS démarré{Colors.RESET}")
+
+            # Vérifier si une génération est terminée
+            if (
+                pipeline.running_generation
+                and pipeline.running_generation.audio_quick_finished
+                and not pipeline.running_generation.abortion_started
+            ):
+                if (
+                    pipeline.running_generation.audio_final_finished
+                    or not pipeline.running_generation.quick_answer_provided
+                ):
+                    callbacks.send_final_assistant_answer()
+                    pipeline.running_generation = None
+                    callbacks.tts_playing = False
+
+                    # Réactiver le micro après la fin du TTS
+                    if audio_processor.interrupted:
+                        logger.info(f"{Colors.CYAN}🎙️ ▶️ Microphone réactivé (fin TTS){Colors.RESET}")
+                        audio_processor.interrupted = False
+                        callbacks.interruption_time = 0
+
+    except asyncio.CancelledError:
+        pass
+    finally:
+        logger.info("🧹 Nettoyage...")
+        mic_capture.stop()
+        audio_task.cancel()
+        try:
+            await audio_task
+        except asyncio.CancelledError:
+            pass
+        audio_processor.shutdown()
 
 
 def main():
-    """Main entry point."""
-    import argparse
+    """Point d'entrée principal."""
+    logger.info("🚀 Initialisation des composants...")
 
-    parser = argparse.ArgumentParser(description="Voice-enabled conversational agent")
-    parser.add_argument("--model", "-m", default="ministral-3", help="LLM model (default: ministral-3)")
-    parser.add_argument("--provider", "-p", default="ollama", help="LLM provider (default: ollama)")
-    parser.add_argument("--tts", default="edgeTTS", help="TTS engine (default: edgeTTS)")
-    parser.add_argument("--language", "-l", default="fr", help="STT language (default: fr)")
-    parser.add_argument("--text", "-t", action="store_true", help="Use text mode instead of voice")
-
-    args = parser.parse_args()
-
-    agent = None
-
-    def signal_handler(sig, frame):
-        print(f"\n{Colors.GRAY}Shutting down...{Colors.RESET}")
-        if agent:
-            agent.shutdown()
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    # Initialiser le pipeline de synthèse vocale AVANT la boucle async
+    # (EdgeEngine utilise asyncio.run() en interne)
+    pipeline = SpeechPipelineManager(
+        tts_engine=TTS_START_ENGINE,
+        llm_provider=LLM_START_PROVIDER,
+        llm_model=LLM_START_MODEL,
+    )
 
     try:
-        if args.text:
-            agent = TextAgent(
-                tts_engine=args.tts,
-                llm_provider=args.provider,
-                llm_model=args.model,
-            )
-        else:
-            agent = VoiceAgent(
-                tts_engine=args.tts,
-                llm_provider=args.provider,
-                llm_model=args.model,
-                language=args.language,
-            )
-        agent.run()
-    except Exception as e:
-        logger.exception(f"Fatal error: {e}")
-        sys.exit(1)
+        asyncio.run(main_async(pipeline))
     finally:
-        if agent:
-            agent.shutdown()
+        # Cleanup
+        pipeline.shutdown()
+        logger.info("👋 Au revoir !")
 
 
 if __name__ == "__main__":
